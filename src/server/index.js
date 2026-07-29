@@ -1,18 +1,33 @@
 import express from "express";
 import dotenv from "dotenv";
-import { getTrendingClusters, getSourceIndex } from "../ranking/trending.js";
+import {
+  getTrendingClusters,
+  getTrendingClustersMulti,
+  getSourceIndex,
+  getStateIndex,
+} from "../ranking/trending.js";
+import { getTodaysSong, getUpcomingSongs, setSongForDate, deleteSongForDate } from "../ranking/songSchedule.js";
 import { CATEGORIES } from "../config/categories.js";
+import { STATE_SOURCES } from "../config/sources.js";
 
 dotenv.config();
 
 const app = express();
+app.use(express.urlencoded({ extended: false }));
 const PORT = process.env.PORT || 3000;
+const ADMIN_KEY = process.env.ADMIN_KEY || "";
 
-// Spotify's OFFICIAL embed player for "Dreams Money Can Buy" by Drake
-// (open.spotify.com/track/1qyFlfPREPbRcS2BNszdYI). This is Spotify's own
-// licensed widget — it streams via Spotify's player, nothing is hosted or
-// reproduced by this site.
-const TODAYS_SONG_TRACK_ID = "1qyFlfPREPbRcS2BNszdYI";
+// Fallback track when no song_schedule row exists for today. Spotify's
+// OFFICIAL embed player for "Dreams Money Can Buy" by Drake
+// (open.spotify.com/track/1qyFlfPREPbRcS2BNszdYI) — Spotify's own licensed
+// widget; nothing is hosted or reproduced by this site.
+const DEFAULT_SONG_TRACK_ID = "1qyFlfPREPbRcS2BNszdYI";
+
+// Categories featured in the header hero strip instead of blended
+// cross-category trending.
+const HERO_CATEGORIES = ["us_politics", "world_geopolitics", "crime_legal"];
+
+const STATE_NAMES = new Map(STATE_SOURCES.map((s) => [s.stateAbbr, s.stateName]));
 
 // --- JSON API -----------------------------------------------------------
 
@@ -38,8 +53,6 @@ function escapeHtml(str = "") {
     .replace(/"/g, "&quot;");
 }
 
-// Deterministic pastel color per source name, used behind the placeholder
-// thumbnail for articles that don't have a real image.
 function placeholderColor(name) {
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
@@ -86,25 +99,23 @@ function renderHeroCards(clusters) {
     .join("\n");
 }
 
-function renderSidebar(sourceIndex) {
-  if (sourceIndex.length === 0) {
-    return `<p class="empty">No sources yet.</p>`;
-  }
-  return sourceIndex
-    .map((source) => {
-      const name = escapeHtml(source.name);
-      const links = source.articles
+function renderDropdownGroup(entries) {
+  if (entries.length === 0) return `<p class="empty">Nothing here yet.</p>`;
+  return entries
+    .map((entry) => {
+      const label = escapeHtml(entry.name);
+      const links = entry.articles
         .map((a) => `<li><a href="${escapeHtml(a.url)}" target="_blank" rel="noopener">${escapeHtml(a.title)}</a></li>`)
         .join("");
       return `<details class="source-entry">
-        <summary>${name}</summary>
+        <summary>${label}</summary>
         <ul>${links}</ul>
       </details>`;
     })
     .join("\n");
 }
 
-function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }) {
+function renderPage({ heroClusters, sourceIndex, stateIndex, categorySections, bigTrending, todaysSong }) {
   const categoriesHtml = categorySections
     .map(
       ({ label, clusters }) => `<section class="category-section">
@@ -113,6 +124,8 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
       </section>`
     )
     .join("\n");
+
+  const trackId = todaysSong?.track_id || DEFAULT_SONG_TRACK_ID;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -147,12 +160,12 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
   .site-header {
     display: flex;
     justify-content: space-between;
-    align-items: flex-end;
+    align-items: center;
     flex-wrap: wrap;
-    gap: 20px;
+    gap: 24px;
     border-bottom: 3px solid #000;
-    padding-bottom: 8px;
-    margin-bottom: 16px;
+    padding-bottom: 12px;
+    margin-bottom: 20px;
   }
   .brand h1 {
     font-size: 28px;
@@ -167,43 +180,49 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
   }
   .header-right {
     display: flex;
-    align-items: center;
-    gap: 24px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    flex: 1;
+    min-width: 280px;
+    max-width: 520px;
+    margin-left: auto;
   }
 
-  /* Glitch / chromatic-aberration logo text, styled after the reference image */
+  /* Glitch / chromatic-aberration logo, sized to fill the header's right side */
   .glitch {
     position: relative;
     font-family: 'Press Start 2P', monospace;
-    font-size: 14px;
-    line-height: 1.4;
+    font-size: clamp(20px, 3.6vw, 34px);
+    line-height: 1.3;
     color: #2b0a4d;
     letter-spacing: 1px;
-    white-space: nowrap;
+    text-align: right;
+    width: 100%;
   }
   .glitch::before,
   .glitch::after {
     content: attr(data-text);
     position: absolute;
     top: 0;
-    left: 0;
+    right: 0;
     width: 100%;
   }
   .glitch::before {
     color: #ff00e6;
-    transform: translate(-2px, -1px);
+    transform: translate(-3px, -2px);
     z-index: -1;
   }
   .glitch::after {
     color: #00e5ff;
-    transform: translate(2px, 1px);
+    transform: translate(3px, 2px);
     z-index: -1;
   }
 
   .song-widget {
     display: flex;
     flex-direction: column;
+    align-items: flex-end;
     gap: 4px;
   }
   .song-label {
@@ -214,7 +233,7 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
     font-family: Georgia, serif;
   }
 
-  /* ---------- Hero / Top 10 ---------- */
+  /* ---------- Section headers (shared look) ---------- */
   .hero-trending h2,
   .category-section h2,
   .big-trending h2,
@@ -225,20 +244,20 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
     border-bottom: 2px solid #000;
     padding-bottom: 4px;
     margin: 0 0 10px 0;
+    text-align: center;
   }
-  .hero-trending {
-    margin-bottom: 28px;
-  }
+
+  /* ---------- Hero: 5 across, 2 down ---------- */
+  .hero-trending { margin-bottom: 32px; }
   .hero-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 16px;
   }
-  .hero-card {
-    color: inherit;
-    text-decoration: none;
-    display: block;
+  @media (max-width: 900px) {
+    .hero-grid { grid-template-columns: repeat(2, 1fr); }
   }
+  .hero-card { color: inherit; text-decoration: none; display: block; }
   .hero-thumb {
     width: 100%;
     aspect-ratio: 16 / 10;
@@ -246,12 +265,7 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
     background: #eee;
     border: 1px solid #ccc;
   }
-  .hero-thumb img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
+  .hero-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .thumb-placeholder {
     width: 100%;
     height: 100%;
@@ -264,27 +278,18 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
     padding: 6px;
     color: #333;
   }
-  .hero-title {
-    font-weight: bold;
-    font-size: 13px;
-    margin-top: 6px;
-    color: var(--link);
-  }
-  .hero-meta {
-    font-size: 11px;
-    color: var(--meta);
-  }
+  .hero-title { font-weight: bold; font-size: 13px; margin-top: 6px; color: var(--link); text-align: center; }
+  .hero-meta { font-size: 11px; color: var(--meta); text-align: center; }
 
-  /* ---------- Main layout: sidebar + categories ---------- */
+  /* ---------- Main layout: sidebar + categories, centered ---------- */
   .main-layout {
     display: flex;
+    justify-content: center;
     gap: 30px;
     align-items: flex-start;
   }
-  .sidebar {
-    width: 230px;
-    flex-shrink: 0;
-  }
+  .sidebar { width: 240px; flex-shrink: 0; }
+  .sidebar-group { margin-bottom: 22px; }
   .source-entry summary {
     cursor: pointer;
     font-weight: bold;
@@ -292,28 +297,28 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
     padding: 4px 0;
     border-bottom: 1px solid #eee;
   }
-  .source-entry ul {
-    list-style: none;
-    margin: 4px 0 8px 0;
-    padding: 0 0 0 10px;
-  }
-  .source-entry li {
-    font-size: 12px;
-    margin-bottom: 4px;
-  }
-  .source-entry a {
-    color: var(--link);
-    text-decoration: none;
-  }
+  .source-entry ul { list-style: none; margin: 4px 0 8px 0; padding: 0 0 0 10px; }
+  .source-entry li { font-size: 12px; margin-bottom: 4px; }
+  .source-entry a { color: var(--link); text-decoration: none; }
   .source-entry a:hover { text-decoration: underline; }
 
   .categories {
     flex: 1;
-    min-width: 0;
+    max-width: 760px;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 24px;
+    grid-template-columns: repeat(2, minmax(280px, 1fr));
+    gap: 20px;
     align-content: start;
+    justify-content: center;
+  }
+  @media (max-width: 700px) {
+    .categories { grid-template-columns: 1fr; }
+  }
+  .category-section {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 14px 16px;
+    background: #fafafa;
   }
 
   /* ---------- Shared headline styling ---------- */
@@ -329,7 +334,12 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
   .meta { color: var(--meta); font-size: 11px; margin-left: 6px; }
   .empty { color: var(--meta); font-size: 13px; }
 
-  .big-trending { margin-top: 36px; }
+  .big-trending {
+    margin-top: 40px;
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+  }
 </style>
 </head>
 <body>
@@ -341,9 +351,9 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
     <div class="header-right">
       <div class="glitch" data-text="NEWS COMES FIRST">NEWS COMES FIRST</div>
       <div class="song-widget">
-        <div class="song-label">Today's Song</div>
+        <div class="song-label">Today's Song${todaysSong?.label ? ` &mdash; ${escapeHtml(todaysSong.label)}` : ""}</div>
         <iframe
-          src="https://open.spotify.com/embed/track/${TODAYS_SONG_TRACK_ID}?utm_source=generator"
+          src="https://open.spotify.com/embed/track/${trackId}?utm_source=generator"
           width="280"
           height="80"
           frameborder="0"
@@ -355,7 +365,7 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
   </header>
 
   <section class="hero-trending">
-    <h2>Top 10 Trending</h2>
+    <h2>U.S. Politics &middot; World / Geopolitics &middot; Crime &amp; Legal</h2>
     <div class="hero-grid">
       ${renderHeroCards(heroClusters)}
     </div>
@@ -363,8 +373,14 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
 
   <div class="main-layout">
     <aside class="sidebar">
-      <h3>All Sources (A&ndash;Z)</h3>
-      ${renderSidebar(sourceIndex)}
+      <div class="sidebar-group">
+        <h3>All Sources (A&ndash;Z)</h3>
+        ${renderDropdownGroup(sourceIndex)}
+      </div>
+      <div class="sidebar-group">
+        <h3>By State (A&ndash;Z)</h3>
+        ${renderDropdownGroup(stateIndex)}
+      </div>
     </aside>
     <main class="categories">
       ${categoriesHtml}
@@ -383,10 +399,12 @@ function renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }
 
 app.get("/", async (req, res) => {
   try {
-    const [heroClusters, sourceIndex, bigTrending, ...categoryClusters] = await Promise.all([
-      getTrendingClusters({ limit: 10 }),
+    const [heroClusters, sourceIndex, stateIndex, bigTrending, todaysSong, ...categoryClusters] = await Promise.all([
+      getTrendingClustersMulti({ categories: HERO_CATEGORIES, limit: 10 }),
       getSourceIndex(),
+      getStateIndex(STATE_NAMES),
       getTrendingClusters({ limit: 40 }),
+      getTodaysSong(),
       ...CATEGORIES.map((cat) => getTrendingClusters({ category: cat.slug, limit: 10 })),
     ]);
 
@@ -395,7 +413,7 @@ app.get("/", async (req, res) => {
       clusters: categoryClusters[i],
     }));
 
-    res.send(renderPage({ heroClusters, sourceIndex, categorySections, bigTrending }));
+    res.send(renderPage({ heroClusters, sourceIndex, stateIndex, categorySections, bigTrending, todaysSong }));
   } catch (err) {
     console.error("[/] error:", err);
     res.status(500).send("Something broke. Check server logs.");
@@ -415,6 +433,74 @@ app.get("/section/:category", async (req, res) => {
     console.error("[/section] error:", err);
     res.status(500).send("Something broke. Check server logs.");
   }
+});
+
+// --- Admin: song schedule ---------------------------------------------------
+// Lightweight shared-secret gate (no login system) — set ADMIN_KEY in .env
+// and visit /admin/song?key=YOUR_KEY. Good enough for a low-stakes internal
+// tool; don't share the URL publicly.
+
+function requireAdminKey(req, res, next) {
+  if (!ADMIN_KEY || req.query.key !== ADMIN_KEY) {
+    return res.status(403).send("Forbidden — missing or incorrect ?key=");
+  }
+  next();
+}
+
+app.get("/admin/song", requireAdminKey, async (req, res) => {
+  const upcoming = await getUpcomingSongs();
+  const rows = upcoming
+    .map((s) => {
+      const date = new Date(s.play_date).toISOString().slice(0, 10);
+      return `<tr>
+        <td>${escapeHtml(date)}</td>
+        <td>${escapeHtml(s.track_id)}</td>
+        <td>${escapeHtml(s.label || "")}</td>
+        <td><form method="POST" action="/admin/song/delete?key=${escapeHtml(req.query.key)}" style="display:inline">
+          <input type="hidden" name="play_date" value="${escapeHtml(date)}" />
+          <button type="submit">Remove</button>
+        </form></td>
+      </tr>`;
+    })
+    .join("");
+
+  res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Song Schedule Admin</title>
+    <style>
+      body{font-family:Georgia,serif;max-width:700px;margin:40px auto;padding:0 20px;}
+      table{width:100%;border-collapse:collapse;margin-top:20px;}
+      td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left;font-size:14px;}
+      input,button{font-size:14px;padding:6px;}
+      form.add{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:16px;}
+      label{font-size:12px;color:#555;display:block;}
+    </style></head>
+    <body>
+      <h1>Today's Song &mdash; Schedule</h1>
+      <p>Add or change the song for any future date. Find a track's ID in its
+      Spotify URL: <code>open.spotify.com/track/&lt;THIS PART&gt;</code></p>
+      <form class="add" method="POST" action="/admin/song?key=${escapeHtml(req.query.key)}">
+        <div><label>Date</label><input type="date" name="play_date" required /></div>
+        <div><label>Spotify Track ID</label><input type="text" name="track_id" required placeholder="e.g. 1qyFlfPREPbRcS2BNszdYI" size="30" /></div>
+        <div><label>Label (optional)</label><input type="text" name="label" placeholder="Song &mdash; Artist" size="24" /></div>
+        <button type="submit">Save</button>
+      </form>
+      <table>
+        <thead><tr><th>Date</th><th>Track ID</th><th>Label</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4">No upcoming songs scheduled — today falls back to the default track.</td></tr>`}</tbody>
+      </table>
+    </body></html>`);
+});
+
+app.post("/admin/song", requireAdminKey, async (req, res) => {
+  const { play_date, track_id, label } = req.body;
+  if (!play_date || !track_id) return res.status(400).send("Missing play_date or track_id");
+  await setSongForDate(play_date, track_id.trim(), (label || "").trim());
+  res.redirect(`/admin/song?key=${encodeURIComponent(req.query.key)}`);
+});
+
+app.post("/admin/song/delete", requireAdminKey, async (req, res) => {
+  const { play_date } = req.body;
+  if (play_date) await deleteSongForDate(play_date);
+  res.redirect(`/admin/song?key=${encodeURIComponent(req.query.key)}`);
 });
 
 app.listen(PORT, () => {

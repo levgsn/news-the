@@ -61,6 +61,32 @@ export async function getTrendingClusters({ category = null, limit = 40 } = {}) 
 }
 
 /**
+ * Same as getTrendingClusters, but pulls from several categories combined
+ * and ranks across all of them together — used for the header hero strip
+ * (currently U.S. Politics + World/Geopolitics + Crime/Legal combined).
+ */
+export async function getTrendingClustersMulti({ categories = [], limit = 10 } = {}) {
+  if (categories.length === 0) return [];
+
+  const { rows } = await pool.query(
+    `SELECT
+       c.id, c.representative_title, c.category, c.trending_score, c.last_seen_at,
+       COUNT(DISTINCT a.source_name) AS source_count,
+       (SELECT a2.url FROM articles a2 WHERE a2.cluster_id = c.id ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_url,
+       (SELECT a2.source_name FROM articles a2 WHERE a2.cluster_id = c.id ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_source,
+       (SELECT a2.image_url FROM articles a2 WHERE a2.cluster_id = c.id AND a2.image_url IS NOT NULL ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_image
+     FROM clusters c
+     JOIN articles a ON a.cluster_id = c.id
+     WHERE c.source_count >= 1 AND c.category = ANY($1::text[])
+     GROUP BY c.id
+     ORDER BY c.trending_score DESC
+     LIMIT $2`,
+    [categories, limit]
+  );
+  return rows;
+}
+
+/**
  * Returns every distinct source name (A-Z) with its most recent articles,
  * for the sidebar's alphabetical source list + dropdown. Uses a single
  * windowed query instead of one query per source so this stays fast even
@@ -87,5 +113,37 @@ export async function getSourceIndex({ perSourceLimit = 5 } = {}) {
 
   return Array.from(bySource.entries())
     .map(([name, articles]) => ({ name, articles }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Returns state news grouped by state (A-Z by full state name), for the
+ * sidebar's state dropdown. Mirrors getSourceIndex's single-windowed-query
+ * approach. Categories for state feeds are "state:<ABBR>" (see
+ * STATE_SOURCES in config/sources.js) — stateNames maps abbr -> full name
+ * for display and alphabetical sorting.
+ */
+export async function getStateIndex(stateNames, { perStateLimit = 5 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT category, title, url, published_at FROM (
+       SELECT
+         category, title, url, published_at,
+         ROW_NUMBER() OVER (PARTITION BY category ORDER BY published_at DESC NULLS LAST) AS rn
+       FROM articles
+       WHERE category LIKE 'state:%'
+     ) ranked
+     WHERE rn <= $1`,
+    [perStateLimit]
+  );
+
+  const byState = new Map();
+  for (const row of rows) {
+    const abbr = row.category.replace("state:", "");
+    if (!byState.has(abbr)) byState.set(abbr, []);
+    byState.get(abbr).push({ title: row.title, url: row.url });
+  }
+
+  return Array.from(byState.entries())
+    .map(([abbr, articles]) => ({ abbr, name: stateNames.get(abbr) || abbr, articles }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }

@@ -28,35 +28,82 @@ news-the/
 
 ## Front page layout
 
-- **Header** — "NEWS, THE" on the left; on the right, a CSS-recreated
+- **Header** — "NEWS, THE" on the left; on the right, a large CSS-recreated
   glitch/chromatic-aberration "NEWS COMES FIRST" logo (pixel font +
-  magenta/cyan offset, matching the reference image) plus a "Today's Song"
-  widget using Spotify's official embed player. It's currently pointed at
-  Drake's "Dreams Money Can Buy" — change the track ID in
-  `TODAYS_SONG_TRACK_ID` in `src/server/index.js` to swap it (grab the ID
-  from the track's `open.spotify.com/track/<ID>` URL).
-- **Top 10 Trending** — a card grid with thumbnails, pulled straight from
-  each story's RSS item image (see "How thumbnails work" below).
-- **Sidebar** — every source that's been ingested, alphabetically, each
-  a click-to-expand `<details>` dropdown showing its 5 most recent
-  articles. No JavaScript needed — this uses native HTML.
-- **10 category sections** — U.S. Politics, World/Geopolitics,
-  Crime/Legal, Business/Economy, Technology/AI, Entertainment/Pop
-  Culture, Sports, Climate/Natural Disasters, International Politics,
-  Social Media/Internet Culture. Each shows its own top 10 by trending
-  score.
-- **Trending Now** — a larger (40-story) combined feed at the bottom, in
-  the classic plain-text Drudge link-list style.
+  magenta/cyan offset) sized to fill that side of the header, plus a
+  "Today's Song" widget using Spotify's official embed player.
+- **Hero strip** — a 5-across/2-down grid combining U.S. Politics,
+  World/Geopolitics, and Crime/Legal (the three categories requested up
+  front), with thumbnails. Change `HERO_CATEGORIES` in
+  `src/server/index.js` to feature different categories instead.
+- **Sidebar** — two alphabetical dropdown groups: every ingested source,
+  and every U.S. state with news about it. Both use native `<details>`
+  elements — no JavaScript needed.
+- **10 category sections** (all of them, including the 3 also featured in
+  the hero) — each a bordered card showing its own top 10 by trending
+  score, laid out in a centered 2-column grid.
+- **Trending Now** — a larger (40-story) combined feed at the bottom.
 
-## How thumbnails work
+## How thumbnails work (and how "always" is handled)
 
-`fetchFeeds.js` tries, in order: a standard RSS `<enclosure>` image, a
-Media RSS `<media:content>`/`<media:thumbnail>` tag (common on BBC,
-Guardian, etc.), then falls back to pulling the first `<img>` src out of
-the item's HTML description. If none of those exist, the front page shows
-a plain colored placeholder card with the source's name instead of a
-broken image — this was tested against all three extraction paths plus
-the no-image fallback before shipping.
+`fetchFeeds.js` first tries an RSS `<enclosure>` image, then Media RSS
+`<media:content>`/`<media:thumbnail>`, then the first `<img>` in the
+item's HTML description. Plenty of real feeds (Variety, Deadline, and
+many others) don't include any of these at all — for those, a second
+pass (`src/ingestion/backfillImages.js`, run at the end of every
+`npm run ingest`) fetches the actual article page for any prominently
+ranked story that still has no image and pulls its Open Graph
+(`og:image`) or Twitter Card (`twitter:image`) meta tag — nearly every
+publisher sets one of these even when their RSS feed doesn't include an
+image. This was tested against real `og:image` and `twitter:image` pages
+before shipping. If a story genuinely has neither (rare), the front page
+falls back to a plain colored placeholder card with the source's name
+rather than a broken image.
+
+## State news
+
+`src/config/sources.js` exports `STATE_SOURCES` — one feed per state,
+generated from a 50-entry list rather than hand-written, each a Google
+News RSS search scoped to that state's name (since there's no single
+clean "all 50 states" RSS provider). Category slug is `state:<ABBR>`
+(e.g. `state:KS`). These show up as their own alphabetical dropdown group
+in the sidebar, separate from the outlet-based source list.
+
+**Cost/performance note:** this adds 50 feeds to every ingestion run on
+top of the ~23 national ones. Two things were changed specifically to
+absorb that:
+- `fetchFeeds.js` now inserts each feed's articles in **one batched
+  multi-row query** instead of one `INSERT` per article — this was the
+  biggest single win, since it turns "hundreds of round trips" into
+  "one per feed."
+- `cluster.js` now loads all recently-active clusters **once per
+  ingestion run** (grouped in memory by category) instead of querying
+  candidates separately for every single pending article.
+
+If a run still feels slow on a remote/public-proxy database connection,
+the first thing to try is trimming `STATE_SOURCES` down to the states you
+actually care about rather than all 50 — see the comment above that
+export in `sources.js`.
+
+## Today's song, scheduled weeks in advance
+
+Rather than hardcoding a track ID in the code (which meant a code change
++ redeploy every time you wanted to change it), there's now a
+`song_schedule` table and a small admin page at **`/admin/song`** on your
+live site.
+
+1. Set `ADMIN_KEY` in `.env` to any random string.
+2. Visit `https://your-site/admin/song?key=YOUR_ADMIN_KEY`.
+3. Fill in a date, a Spotify track ID (the part of the URL after
+   `open.spotify.com/track/`), and an optional label — you can queue up
+   as many future dates as you want in one sitting.
+4. The homepage automatically shows whichever song is scheduled for
+   today; if nothing's scheduled, it falls back to the default track set
+   in `DEFAULT_SONG_TRACK_ID` in `src/server/index.js`.
+
+No code edits, no redeploys, no PowerShell — just that one page, from any
+device.
+
 
 ## Local setup
 
@@ -124,14 +171,16 @@ the no-image fallback before shipping.
 2. **Prediction markets.** Kalshi and Polymarket both expose public read
    APIs (no scraping needed) — pull top-volume/most-moved markets on the
    same cron cadence as a new ingestion module.
-3. **State/college local sections.** Start as pure aggregation (local
-   paper + campus paper RSS feeds tagged `local:<state>` /
-   `campus:<school>`) before considering any user-submitted-post feature —
-   UGC brings moderation and legal exposure worth scoping separately.
+3. **Campus/college local sections.** States are covered now — campus
+   papers (tagged `campus:<school>`) are the remaining piece of the
+   original local-news idea. Start as pure aggregation (a school's
+   student-paper RSS feed) before considering any user-submitted-post
+   feature — UGC brings moderation and legal exposure worth scoping
+   separately.
 4. **PWA wrapper** for "the app" — add a manifest + service worker to the
    existing server-rendered pages rather than building native apps first.
-5. **Combine the 10 per-category queries into one grouped query** if page
-   load feels slow on a remote/public-proxy database connection — right
-   now the homepage fires ~13 queries in parallel, which is fine on a
-   fast connection but is the first thing worth optimizing if it drags.
+5. **Batch the per-category homepage queries** into one grouped query if
+   page load feels slow on a remote/public-proxy database connection —
+   the homepage currently fires about a dozen queries in parallel, fine
+   on a fast connection but the first thing worth optimizing if it drags.
 

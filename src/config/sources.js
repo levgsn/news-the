@@ -63,6 +63,39 @@ export const SOURCES = [
   { name: "Internet Culture (Google)", url: googleNewsFeed("TikTok OR viral OR internet culture OR social media trend"), category: "social_media_internet_culture", weight: 0.8 },
 ];
 
+// --- State news (sidebar dropdown) ---
+// Generated rather than hand-written — one Google News search per state,
+// scoped to news mentioning that state. Category slug is `state:<abbr>`.
+// HEADS UP: this adds 50 extra feeds to every ingestion run. That's a real
+// cost — more network calls and more DB writes each time `npm run ingest`
+// runs — not a huge one (each is a single lightweight RSS fetch), but if
+// your cron job feels slow, the first thing to try is trimming this list
+// down to the states you actually care about rather than all 50.
+const STATES = [
+  ["AL", "Alabama"], ["AK", "Alaska"], ["AZ", "Arizona"], ["AR", "Arkansas"],
+  ["CA", "California"], ["CO", "Colorado"], ["CT", "Connecticut"], ["DE", "Delaware"],
+  ["FL", "Florida"], ["GA", "Georgia"], ["HI", "Hawaii"], ["ID", "Idaho"],
+  ["IL", "Illinois"], ["IN", "Indiana"], ["IA", "Iowa"], ["KS", "Kansas"],
+  ["KY", "Kentucky"], ["LA", "Louisiana"], ["ME", "Maine"], ["MD", "Maryland"],
+  ["MA", "Massachusetts"], ["MI", "Michigan"], ["MN", "Minnesota"], ["MS", "Mississippi"],
+  ["MO", "Missouri"], ["MT", "Montana"], ["NE", "Nebraska"], ["NV", "Nevada"],
+  ["NH", "New Hampshire"], ["NJ", "New Jersey"], ["NM", "New Mexico"], ["NY", "New York"],
+  ["NC", "North Carolina"], ["ND", "North Dakota"], ["OH", "Ohio"], ["OK", "Oklahoma"],
+  ["OR", "Oregon"], ["PA", "Pennsylvania"], ["RI", "Rhode Island"], ["SC", "South Carolina"],
+  ["SD", "South Dakota"], ["TN", "Tennessee"], ["TX", "Texas"], ["UT", "Utah"],
+  ["VT", "Vermont"], ["VA", "Virginia"], ["WA", "Washington"], ["WV", "West Virginia"],
+  ["WI", "Wisconsin"], ["WY", "Wyoming"],
+];
+
+export const STATE_SOURCES = STATES.map(([abbr, name]) => ({
+  name: `${name} News`,
+  url: googleNewsFeed(`when:24h ${name} (state government OR local news)`),
+  category: `state:${abbr}`,
+  weight: 0.8,
+  stateName: name,
+  stateAbbr: abbr,
+}));
+
 // Local/college sources: same shape as above, just tag category as
 // "local:<state>" or "campus:<school>" once you build that source list,
 // e.g. { name: "KU The University Daily Kansan", url: "...", category: "campus:ku", weight: 0.8 }

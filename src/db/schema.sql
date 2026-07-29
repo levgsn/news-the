@@ -32,3 +32,11 @@ CREATE INDEX IF NOT EXISTS idx_clusters_trending_score ON clusters(trending_scor
 -- already migrated before this column existed.
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS image_url TEXT;
 CREATE INDEX IF NOT EXISTS idx_articles_source_name ON articles(source_name);
+
+-- Lets you schedule "today's song" weeks in advance via the /admin/song
+-- page instead of editing code. One row per calendar date.
+CREATE TABLE IF NOT EXISTS song_schedule (
+  play_date DATE PRIMARY KEY,
+  track_id TEXT NOT NULL,
+  label TEXT
+);

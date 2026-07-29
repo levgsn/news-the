@@ -1,6 +1,6 @@
 import Parser from "rss-parser";
 import { pool } from "../db/client.js";
-import { SOURCES } from "../config/sources.js";
+import { SOURCES, STATE_SOURCES } from "../config/sources.js";
 
 const parser = new Parser({
   timeout: 15000,
@@ -16,27 +16,21 @@ const parser = new Parser({
 /**
  * Pulls a thumbnail URL out of an RSS item, trying the common places outlets
  * put one, roughly in order of reliability. Returns null if nothing usable
- * is found — the UI falls back to a plain placeholder card in that case.
+ * is found — see backfillMissingImages() in trending.js's sibling module
+ * for the og:image fallback that runs afterward for prominently-displayed
+ * stories that still have nothing.
  */
 function extractImage(item) {
-  // 1. Standard <enclosure> with an image type (rss-parser parses this itself)
   if (item.enclosure?.url && (item.enclosure.type || "").startsWith("image")) {
     return item.enclosure.url;
   }
-
-  // 2. Media RSS <media:content> (very common: BBC, Guardian, etc.)
   const mediaContent = item.mediaContent?.[0]?.$;
   if (mediaContent?.url && (!mediaContent.medium || mediaContent.medium === "image")) {
     return mediaContent.url;
   }
-
-  // 3. Media RSS <media:thumbnail>
   const mediaThumb = item.mediaThumbnail?.[0]?.$;
-  if (mediaThumb?.url) {
-    return mediaThumb.url;
-  }
+  if (mediaThumb?.url) return mediaThumb.url;
 
-  // 4. Some feeds only put an <img> tag inside the HTML description/content
   const html = item["content:encoded"] || item.content || item.contentSnippet || "";
   const match = /<img[^>]+src=["']([^"']+)["']/i.exec(html);
   if (match) return match[1];
@@ -53,45 +47,53 @@ async function fetchOneSource(source) {
     return { source: source.name, inserted: 0, failed: true };
   }
 
-  let inserted = 0;
-
+  const rows = [];
   for (const item of feed.items ?? []) {
     const title = (item.title || "").trim();
     const url = (item.link || "").trim();
     if (!title || !url) continue;
-
-    const publishedAt = item.isoDate || item.pubDate || null;
-    const imageUrl = extractImage(item);
-
-    // ON CONFLICT (url) DO NOTHING makes this safe to re-run on overlapping
-    // feed windows without creating duplicate articles. cluster_id is left
-    // NULL here on purpose — clustering runs as a separate serial pass
-    // (see clusterPendingArticles in processing/cluster.js) so that two
-    // sources fetching concurrently can't race each other into creating
-    // duplicate clusters for the same story.
-    const { rows } = await pool.query(
-      `INSERT INTO articles (source_name, category, title, url, published_at, image_url)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (url) DO NOTHING
-       RETURNING id`,
-      [source.name, source.category, title, url, publishedAt, imageUrl]
-    );
-
-    if (rows.length === 0) continue; // already existed
-    inserted++;
+    rows.push({
+      source_name: source.name,
+      category: source.category,
+      title,
+      url,
+      published_at: item.isoDate || item.pubDate || null,
+      image_url: extractImage(item),
+    });
   }
 
-  return { source: source.name, inserted, failed: false };
+  if (rows.length === 0) return { source: source.name, inserted: 0, failed: false };
+
+  // Batched multi-row insert (one round trip for the whole feed) instead of
+  // one INSERT per item — matters a lot once you're running 70+ feeds per
+  // cycle instead of a handful. ON CONFLICT (url) DO NOTHING keeps re-runs
+  // over overlapping feed windows safe.
+  const { rows: inserted } = await pool.query(
+    `INSERT INTO articles (source_name, category, title, url, published_at, image_url)
+     SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::text[])
+     ON CONFLICT (url) DO NOTHING
+     RETURNING id`,
+    [
+      rows.map((r) => r.source_name),
+      rows.map((r) => r.category),
+      rows.map((r) => r.title),
+      rows.map((r) => r.url),
+      rows.map((r) => r.published_at),
+      rows.map((r) => r.image_url),
+    ]
+  );
+
+  return { source: source.name, inserted: inserted.length, failed: false };
 }
 
 /**
- * Runs ingestion across all configured sources. Sequential with a small
- * concurrency window rather than fully parallel, so we don't hammer 20
- * feeds at once from a single Railway worker.
+ * Runs ingestion across all configured sources (national + all state feeds).
+ * Sequential with a small concurrency window rather than fully parallel, so
+ * we don't hammer 70+ feeds at once from a single Railway worker.
  */
-export async function fetchAllFeeds({ concurrency = 4 } = {}) {
+export async function fetchAllFeeds({ concurrency = 6, includeStates = true } = {}) {
   const results = [];
-  const queue = [...SOURCES];
+  const queue = [...SOURCES, ...(includeStates ? STATE_SOURCES : [])];
 
   async function worker() {
     while (queue.length > 0) {
