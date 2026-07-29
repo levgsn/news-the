@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel>
+<title>Fake Politics Outlet</title>
+<item>
+  <title>Senate passes major spending bill after late night vote</title>
+  <link>http://localhost:8081/story1</link>
+  <pubDate>Tue, 28 Jul 2026 10:00:00 GMT</pubDate>
+  <media:content url="http://localhost:8081/thumb1.jpg" medium="image" />
+</item>
+<item>
+  <title>Governor signs new state budget into law</title>
+  <link>http://localhost:8081/story2</link>
+  <pubDate>Tue, 28 Jul 2026 09:00:00 GMT</pubDate>
+</item>
+</channel></rss>
