@@ -61,29 +61,57 @@ export async function getTrendingClusters({ category = null, limit = 40 } = {}) 
 }
 
 /**
- * Same as getTrendingClusters, but pulls from several categories combined
- * and ranks across all of them together — used for the header hero strip
- * (currently U.S. Politics + World/Geopolitics + Crime/Legal combined).
+ * Fills `limit` slots for the header hero strip by going down a priority
+ * list of tiers in order, taking each tier's top trending clusters (by
+ * score) until the tier runs out or the slots run out, then moving to the
+ * next tier. A tier with `category: null` matches any category (used for
+ * an overall-trending catch-all tier). This means a tier that has enough
+ * trending stories on its own can fill every slot — tiers below it only
+ * get used to fill what's left over.
  */
-export async function getTrendingClustersMulti({ categories = [], limit = 10 } = {}) {
-  if (categories.length === 0) return [];
+export async function getTrendingClustersPriority({ tiers = [], limit = 10 } = {}) {
+  const selected = [];
+  const usedIds = new Set();
 
-  const { rows } = await pool.query(
-    `SELECT
-       c.id, c.representative_title, c.category, c.trending_score, c.last_seen_at,
-       COUNT(DISTINCT a.source_name) AS source_count,
-       (SELECT a2.url FROM articles a2 WHERE a2.cluster_id = c.id ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_url,
-       (SELECT a2.source_name FROM articles a2 WHERE a2.cluster_id = c.id ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_source,
-       (SELECT a2.image_url FROM articles a2 WHERE a2.cluster_id = c.id AND a2.image_url IS NOT NULL ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_image
-     FROM clusters c
-     JOIN articles a ON a.cluster_id = c.id
-     WHERE c.source_count >= 1 AND c.category = ANY($1::text[])
-     GROUP BY c.id
-     ORDER BY c.trending_score DESC
-     LIMIT $2`,
-    [categories, limit]
-  );
-  return rows;
+  for (const tier of tiers) {
+    if (selected.length >= limit) break;
+    const remaining = limit - selected.length;
+
+    const params = [];
+    let where = `c.source_count >= 1`;
+    if (tier.category) {
+      params.push(tier.category);
+      where += ` AND c.category = $${params.length}`;
+    }
+    if (usedIds.size > 0) {
+      params.push(Array.from(usedIds));
+      where += ` AND c.id != ALL($${params.length}::int[])`;
+    }
+    params.push(remaining);
+
+    const { rows } = await pool.query(
+      `SELECT
+         c.id, c.representative_title, c.category, c.trending_score, c.last_seen_at,
+         COUNT(DISTINCT a.source_name) AS source_count,
+         (SELECT a2.url FROM articles a2 WHERE a2.cluster_id = c.id ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_url,
+         (SELECT a2.source_name FROM articles a2 WHERE a2.cluster_id = c.id ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_source,
+         (SELECT a2.image_url FROM articles a2 WHERE a2.cluster_id = c.id AND a2.image_url IS NOT NULL ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_image
+       FROM clusters c
+       JOIN articles a ON a.cluster_id = c.id
+       WHERE ${where}
+       GROUP BY c.id
+       ORDER BY c.trending_score DESC
+       LIMIT $${params.length}`,
+      params
+    );
+
+    for (const row of rows) {
+      selected.push(row);
+      usedIds.add(row.id);
+    }
+  }
+
+  return selected;
 }
 
 /**

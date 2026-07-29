@@ -2,7 +2,7 @@ import express from "express";
 import dotenv from "dotenv";
 import {
   getTrendingClusters,
-  getTrendingClustersMulti,
+  getTrendingClustersPriority,
   getSourceIndex,
   getStateIndex,
 } from "../ranking/trending.js";
@@ -23,9 +23,17 @@ const ADMIN_KEY = process.env.ADMIN_KEY || "";
 // widget; nothing is hosted or reproduced by this site.
 const DEFAULT_SONG_TRACK_ID = "1qyFlfPREPbRcS2BNszdYI";
 
-// Categories featured in the header hero strip instead of blended
-// cross-category trending.
-const HERO_CATEGORIES = ["us_politics", "world_geopolitics", "crime_legal"];
+// Priority order for filling the 10 header hero slots: each tier's top
+// trending stories fill as many slots as it has (up to what's left), then
+// the next tier fills whatever's still open. `category: null` means "any
+// category" — used here as an overall-trending catch-all above Crime/Legal.
+const HERO_TIERS = [
+  { category: "us_politics" },
+  { category: "world_geopolitics" },
+  { category: "business_economy" },
+  { category: null },
+  { category: "crime_legal" },
+];
 
 const STATE_NAMES = new Map(STATE_SOURCES.map((s) => [s.stateAbbr, s.stateName]));
 
@@ -400,7 +408,7 @@ function renderPage({ heroClusters, sourceIndex, stateIndex, categorySections, b
 app.get("/", async (req, res) => {
   try {
     const [heroClusters, sourceIndex, stateIndex, bigTrending, todaysSong, ...categoryClusters] = await Promise.all([
-      getTrendingClustersMulti({ categories: HERO_CATEGORIES, limit: 10 }),
+      getTrendingClustersPriority({ tiers: HERO_TIERS, limit: 10 }),
       getSourceIndex(),
       getStateIndex(STATE_NAMES),
       getTrendingClusters({ limit: 40 }),
