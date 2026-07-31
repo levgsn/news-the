@@ -18,7 +18,7 @@ import {
 } from "../ai/dailySummary.js";
 import { backfillImagesForClusters } from "../ingestion/backfillImages.js";
 import { CATEGORIES } from "../config/categories.js";
-import { findZonesNearPoint } from "../config/compassZones.js";
+import { getQuadrant } from "../config/compassZones.js";
 
 dotenv.config();
 
@@ -138,16 +138,16 @@ function renderHeroCards(clusters) {
     .join("\n");
 }
 
-// Live web-search results (compassSearch.js, via GNews.io) for a clicked
-// zone, Drudge Report style: the single most-relevant story gets a
-// featured thumbnail+title+link, everything else is a plain headline list
-// below. GNews returns real article URLs and real thumbnail images, so
-// the featured card shows an actual photo when available (with the same
-// hotlink-failure fallback used on the hero grid).
-function renderCompassResults(zoneLabel, items) {
-  const heading = `<h3 class="compass-results-heading">${escapeHtml(zoneLabel)}</h3>`;
+// Live web-search results (compassSearch.js, via GNews.io) for whichever
+// quadrant was clicked, Drudge Report style: the single most-relevant
+// story gets a featured thumbnail+title+link, everything else is a plain
+// headline list below. No heading -- just the results. GNews returns real
+// article URLs and real thumbnail images, so the featured card shows an
+// actual photo when available (with the same hotlink-failure fallback
+// used on the hero grid).
+function renderCompassResults(items) {
   if (items.length === 0) {
-    return `${heading}<p class="empty">No live results found for this spot yet — try another point on the chart.</p>`;
+    return `<p class="empty">No live results found right now — try again in a moment.</p>`;
   }
 
   const [featured, ...rest] = items;
@@ -169,7 +169,7 @@ function renderCompassResults(zoneLabel, items) {
     )
     .join("\n");
 
-  return `${heading}${featuredHtml}${listHtml ? `<div class="compass-list">${listHtml}</div>` : ""}`;
+  return `${featuredHtml}${listHtml ? `<div class="compass-list">${listHtml}</div>` : ""}`;
 }
 
 // Public-facing "Today's Summary" -- either AI-generated or the site
@@ -470,15 +470,6 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
     min-width: 280px;
     max-width: 480px;
   }
-  .compass-results-heading {
-    font-size: 14px;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    border-bottom: 2px solid #000;
-    padding-bottom: 4px;
-    margin: 0 0 12px 0;
-  }
   .compass-featured { color: inherit; text-decoration: none; display: block; margin-bottom: 16px; }
   .compass-featured-thumb {
     width: 100%;
@@ -774,24 +765,19 @@ app.get("/api/compass", async (req, res) => {
   try {
     const economic = Math.min(1, Math.max(-1, Number(req.query.economic) || 0));
     const authoritarian = Math.min(1, Math.max(-1, Number(req.query.authoritarian) || 0));
-    const nearbyZones = findZonesNearPoint(economic, authoritarian);
+    const quadrant = getQuadrant(economic, authoritarian);
 
-    // No visible zone boxes anymore -- this is purely "search the nearest
-    // zone's label, and if that comes up empty, fall through to the next
-    // nearest one" so a click anywhere on the blank compass has a real
-    // shot at results, not just the single nearest label. Capped at 3
-    // tries to keep GNews' free-tier daily quota in check.
-    let zone = nearbyZones[0];
-    let items = [];
-    for (const candidate of nearbyZones.slice(0, 3)) {
-      items = await searchNewsForZone(candidate);
-      if (items.length > 0) {
-        zone = candidate;
-        break;
-      }
+    // Every click/drag inside the same quadrant runs this same query, so
+    // results are identical throughout that whole colored area -- by
+    // design, not a bug. Falls back to a broad "politics" search on the
+    // rare chance the quadrant's own query comes back empty, so a click
+    // anywhere always turns up something.
+    let items = await searchNewsForZone(quadrant);
+    if (items.length === 0) {
+      items = await searchNewsForZone({ label: "Politics", query: "politics" });
     }
 
-    res.type("html").send(renderCompassResults(zone.label, items));
+    res.type("html").send(renderCompassResults(items));
   } catch (err) {
     console.error("[api/compass] error:", err);
     res.status(500).send(`<p class="empty">Something broke loading results.</p>`);
