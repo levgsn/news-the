@@ -40,3 +40,41 @@ CREATE TABLE IF NOT EXISTS song_schedule (
   track_id TEXT NOT NULL,
   label TEXT
 );
+
+-- AI headline-synthesis summary per cluster (one story, many outlets).
+-- content_hash fingerprints the exact (source_name, title) pairs the
+-- summary was generated from, so a cluster picking up new outlets
+-- regenerates on next request, but an unchanged cluster is a pure cache
+-- hit -- no repeat Claude calls.
+CREATE TABLE IF NOT EXISTS cluster_summaries (
+  cluster_id INT PRIMARY KEY REFERENCES clusters(id) ON DELETE CASCADE,
+  summary_text TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  model TEXT NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- AI daily rundown text, one per (date, political-compass-quadrant scope).
+-- Lazily generated on first request for that date+scope; the UNIQUE
+-- constraint is the cache key, keeping Claude calls bounded to
+-- (dates x 5 scopes) rather than one per page view.
+CREATE TABLE IF NOT EXISTS daily_rundowns (
+  id SERIAL PRIMARY KEY,
+  rundown_date DATE NOT NULL,
+  scope TEXT NOT NULL, -- 'all' | 'authoritarian_left' | 'authoritarian_right' | 'libertarian_left' | 'libertarian_right'
+  text_content TEXT NOT NULL,
+  model TEXT NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (rundown_date, scope)
+);
+
+-- Generic ElevenLabs TTS audio cache, keyed by a hash of the exact text +
+-- voice spoken. Shared by article-summary and daily-rundown playback, so
+-- identical text is never re-synthesized. BYTEA rather than local disk
+-- because Railway's filesystem is ephemeral across redeploys.
+CREATE TABLE IF NOT EXISTS tts_audio_cache (
+  cache_key TEXT PRIMARY KEY,
+  audio_data BYTEA NOT NULL,
+  content_type TEXT NOT NULL DEFAULT 'audio/mpeg',
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

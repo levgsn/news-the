@@ -7,7 +7,7 @@
 // fallback — this is a standard technique (many RSS readers do the same)
 // and returns real outlet links, not Google's own content.
 
-function googleNewsFeed(query) {
+export function googleNewsFeed(query) {
   return `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
 }
 

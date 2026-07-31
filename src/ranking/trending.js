@@ -68,14 +68,23 @@ export async function getTrendingClusters({ category = null, limit = 40 } = {}) 
  * an overall-trending catch-all tier). This means a tier that has enough
  * trending stories on its own can fill every slot — tiers below it only
  * get used to fill what's left over.
+ *
+ * `maxPerSource` caps how many slots any single outlet (a cluster's
+ * `top_source`) can take, GLOBALLY across all tiers combined -- not reset
+ * per tier. Without this, a tier whose top trending stories happen to be
+ * dominated by one or two outlets fills the whole hero with just those
+ * outlets. Because some rows will get skipped by this cap, each tier
+ * overfetches candidates rather than requesting exactly `remaining`.
  */
-export async function getTrendingClustersPriority({ tiers = [], limit = 10 } = {}) {
+export async function getTrendingClustersPriority({ tiers = [], limit = 10, maxPerSource = 1 } = {}) {
   const selected = [];
   const usedIds = new Set();
+  const sourceCounts = new Map();
 
   for (const tier of tiers) {
     if (selected.length >= limit) break;
     const remaining = limit - selected.length;
+    const overfetch = Math.max(remaining * 5, 30);
 
     const params = [];
     let where = `c.source_count >= 1`;
@@ -87,7 +96,7 @@ export async function getTrendingClustersPriority({ tiers = [], limit = 10 } = {
       params.push(Array.from(usedIds));
       where += ` AND c.id != ALL($${params.length}::int[])`;
     }
-    params.push(remaining);
+    params.push(overfetch);
 
     const { rows } = await pool.query(
       `SELECT
@@ -105,9 +114,16 @@ export async function getTrendingClustersPriority({ tiers = [], limit = 10 } = {
       params
     );
 
+    let takenThisTier = 0;
     for (const row of rows) {
+      if (takenThisTier >= remaining) break;
+      const count = sourceCounts.get(row.top_source) || 0;
+      if (count >= maxPerSource) continue;
+
       selected.push(row);
       usedIds.add(row.id);
+      sourceCounts.set(row.top_source, count + 1);
+      takenThisTier++;
     }
   }
 
