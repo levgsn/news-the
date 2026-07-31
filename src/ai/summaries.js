@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
 import { pool } from "../db/client.js";
 import { generateText, ANTHROPIC_MODEL } from "./claude.js";
-import { getTrendingClusters } from "../ranking/trending.js";
-import { getClustersInQuadrant } from "../ranking/compass.js";
 
 function hashArticleSet(articles) {
   const fingerprint = articles.map((a) => `${a.source_name}::${a.title}`).sort().join("|");
@@ -50,42 +48,4 @@ export async function getOrGenerateClusterSummary(clusterId) {
   );
 
   return summary;
-}
-
-export async function getOrGenerateDailyRundown(scope = "all") {
-  const today = new Date().toISOString().slice(0, 10);
-
-  const { rows: cached } = await pool.query(
-    `SELECT text_content FROM daily_rundowns WHERE rundown_date = $1 AND scope = $2`,
-    [today, scope]
-  );
-  if (cached[0]) return cached[0].text_content;
-
-  const clusters =
-    scope === "all"
-      ? await getTrendingClusters({ limit: 25 })
-      : await getClustersInQuadrant(scope, { limit: 25 });
-  if (clusters.length === 0) return null;
-
-  const headlineLines = clusters
-    .map((c) => `- [${c.category}] ${c.representative_title} (${c.top_source})`)
-    .join("\n");
-  const scopeLabel =
-    scope === "all" ? "all today's top stories" : `stories whose covering outlets lean ${scope.replace("_", "-")}`;
-
-  const text = await generateText({
-    system:
-      "You write a spoken-style daily news rundown for a general audience, based only on headlines and categories -- no article bodies available. Warm but neutral, roughly 500-700 words, organized by theme, suitable for reading aloud.",
-    prompt: `Write today's news rundown covering ${scopeLabel}, based on these headlines:\n${headlineLines}`,
-    maxTokens: 1200,
-  });
-
-  await pool.query(
-    `INSERT INTO daily_rundowns (rundown_date, scope, text_content, model)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (rundown_date, scope) DO NOTHING`,
-    [today, scope, text, ANTHROPIC_MODEL]
-  );
-
-  return text;
 }

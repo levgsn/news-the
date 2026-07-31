@@ -5,10 +5,10 @@ import {
   getTrendingClustersPriority,
 } from "../ranking/trending.js";
 import { getTodaysSong, getUpcomingSongs, setSongForDate, deleteSongForDate } from "../ranking/songSchedule.js";
-import { searchClusters } from "../ranking/search.js";
 import { searchNewsForZone } from "../ranking/compassSearch.js";
-import { getOrGenerateClusterSummary, getOrGenerateDailyRundown } from "../ai/summaries.js";
+import { getOrGenerateClusterSummary } from "../ai/summaries.js";
 import { getOrSynthesizeAudio } from "../ai/audioCache.js";
+import { backfillImagesForClusters } from "../ingestion/backfillImages.js";
 import { CATEGORIES } from "../config/categories.js";
 import { COMPASS_ZONES, findZoneForPoint } from "../config/compassZones.js";
 
@@ -20,10 +20,10 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY || "";
 
 // Fallback track when no song_schedule row exists for today. Spotify's
-// OFFICIAL embed player for "Dreams Money Can Buy" by Drake
-// (open.spotify.com/track/1qyFlfPREPbRcS2BNszdYI) — Spotify's own licensed
+// OFFICIAL embed player for "Changes" by 2Pac (1998 Greatest Hits)
+// (open.spotify.com/track/3pclEGdsAxuNaSU7BGgtFb) — Spotify's own licensed
 // widget; nothing is hosted or reproduced by this site.
-const DEFAULT_SONG_TRACK_ID = "1qyFlfPREPbRcS2BNszdYI";
+const DEFAULT_SONG_TRACK_ID = "3pclEGdsAxuNaSU7BGgtFb";
 
 // Priority order for filling the 10 header hero slots: each tier's top
 // trending stories fill as many slots as it has (up to what's left), then
@@ -36,15 +36,6 @@ const HERO_TIERS = [
   { category: null },
   { category: "crime_legal" },
 ];
-
-const RUNDOWN_SCOPES = [
-  { value: "all", label: "All" },
-  { value: "authoritarian_left", label: "Auth-Left" },
-  { value: "authoritarian_right", label: "Auth-Right" },
-  { value: "libertarian_left", label: "Lib-Left" },
-  { value: "libertarian_right", label: "Lib-Right" },
-];
-const RUNDOWN_SCOPE_VALUES = new Set(RUNDOWN_SCOPES.map((s) => s.value));
 
 // --- JSON API -----------------------------------------------------------
 
@@ -119,11 +110,11 @@ function renderHeroCards(clusters) {
       const url = escapeHtml(c.top_url || "#");
       const src = escapeHtml(c.top_source || "");
       const thumb = c.top_image
-        ? `<img src="${escapeHtml(c.top_image)}" alt="" loading="lazy" />`
+        ? `<img src="${escapeHtml(c.top_image)}" alt="" loading="lazy" onerror="handleImgError(this)" />`
         : `<div class="thumb-placeholder" style="background:${placeholderColor(src)}"><span>${src}</span></div>`;
       return `<div class="hero-card">
         <a class="hero-card-link" href="${url}" target="_blank" rel="noopener">
-          <div class="hero-thumb">${thumb}</div>
+          <div class="hero-thumb" data-fallback-color="${placeholderColor(src)}" data-fallback-label="${src}">${thumb}</div>
           <div class="hero-title">${title}</div>
           <div class="hero-meta">${src}</div>
         </a>
@@ -147,30 +138,38 @@ function renderCompassZoneLabels() {
   }).join("\n");
 }
 
-// Live web-search results (compassSearch.js) rendered as thumbnail cards,
-// same visual language as the hero grid. These aren't DB clusters, so no
-// summarize/audio controls -- just image + title + outlet, linking out.
-function renderCompassResultCards(zoneLabel, items) {
+// Live web-search results (compassSearch.js) for a clicked zone, Drudge
+// Report style: the single most-relevant story gets a featured
+// thumbnail+title+link, everything else is a plain headline list below.
+// No thumbnails on the list items -- see compassSearch.js for why (Google
+// News links are redirect tokens, not real article URLs, so scraping them
+// only ever returns Google's own icon). The one featured placeholder is an
+// honest outlet-colored card, not a fake photo.
+function renderCompassResults(zoneLabel, items) {
   const heading = `<h3 class="compass-results-heading">${escapeHtml(zoneLabel)}</h3>`;
   if (items.length === 0) {
     return `${heading}<p class="empty">No live results found for this spot yet — try another point on the chart.</p>`;
   }
-  const cards = items
-    .map((item) => {
-      const title = escapeHtml(item.title);
-      const url = escapeHtml(item.url);
-      const outlet = escapeHtml(item.outlet);
-      const thumb = item.image
-        ? `<img src="${escapeHtml(item.image)}" alt="" loading="lazy" />`
-        : `<div class="thumb-placeholder" style="background:${placeholderColor(outlet)}"><span>${outlet}</span></div>`;
-      return `<a class="compass-result-card" href="${url}" target="_blank" rel="noopener">
-        <div class="compass-result-thumb">${thumb}</div>
-        <div class="compass-result-title">${title}</div>
-        <div class="compass-result-meta">${outlet}</div>
-      </a>`;
-    })
+
+  const [featured, ...rest] = items;
+  const featuredHtml = `<a class="compass-featured" href="${escapeHtml(featured.url)}" target="_blank" rel="noopener">
+    <div class="compass-featured-thumb">
+      <div class="thumb-placeholder" style="background:${placeholderColor(featured.outlet)}"><span>${escapeHtml(featured.outlet)}</span></div>
+    </div>
+    <div class="compass-featured-title">${escapeHtml(featured.title)}</div>
+    <div class="compass-featured-meta">${escapeHtml(featured.outlet)}</div>
+  </a>`;
+
+  const listHtml = rest
+    .map(
+      (item) => `<div class="headline">
+        <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.title.toUpperCase())}</a>
+        <span class="meta">(${escapeHtml(item.outlet)})</span>
+      </div>`
+    )
     .join("\n");
-  return `${heading}<div class="compass-result-grid">${cards}</div>`;
+
+  return `${heading}${featuredHtml}${listHtml ? `<div class="compass-list">${listHtml}</div>` : ""}`;
 }
 
 function renderPage({ heroClusters, categorySections, bigTrending, todaysSong }) {
@@ -185,11 +184,6 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
 
   const trackId = todaysSong?.track_id || DEFAULT_SONG_TRACK_ID;
 
-  const rundownTabsHtml = RUNDOWN_SCOPES.map(
-    (s, i) =>
-      `<button type="button" class="rundown-tab${i === 0 ? " active" : ""}" data-scope="${s.value}" onclick="loadRundown('${s.value}', this)">${escapeHtml(s.label)}</button>`
-  ).join("\n");
-
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -198,7 +192,7 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
 <title>DirectioNews</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;700;900&display=swap" rel="stylesheet" />
 <style>
   :root {
     --ink: #000;
@@ -206,12 +200,13 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
     --link: #0000cc;
     --visited: #551a8b;
     --meta: #666;
+    --font: 'Roboto Condensed', Arial, Helvetica, sans-serif;
   }
   * { box-sizing: border-box; }
   body {
     background: var(--paper);
     color: var(--ink);
-    font-family: Georgia, 'Times New Roman', serif;
+    font-family: var(--font);
     max-width: 1200px;
     margin: 0 auto;
     padding: 20px;
@@ -231,14 +226,16 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
     margin-bottom: 20px;
   }
   .brand h1 {
-    font-size: 28px;
-    letter-spacing: 1px;
+    font-size: 30px;
+    font-weight: 900;
+    letter-spacing: 0.5px;
     margin: 0;
   }
   .brand .subtitle {
     font-size: 12px;
     color: var(--meta);
     text-transform: uppercase;
+    letter-spacing: 0.5px;
     margin-top: 2px;
   }
   .header-right {
@@ -255,11 +252,12 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
   /* Glitch / chromatic-aberration logo, sized to fill the header's right side */
   .glitch {
     position: relative;
-    font-family: 'Press Start 2P', monospace;
-    font-size: clamp(20px, 3.6vw, 34px);
-    line-height: 1.3;
+    font-family: var(--font);
+    font-weight: 900;
+    font-size: clamp(22px, 4vw, 38px);
+    line-height: 1.2;
     color: #2b0a4d;
-    letter-spacing: 1px;
+    letter-spacing: 0.5px;
     text-align: right;
     width: 100%;
   }
@@ -293,90 +291,22 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
     letter-spacing: 1px;
     color: var(--meta);
     text-transform: uppercase;
-    font-family: Georgia, serif;
+    font-family: var(--font);
   }
-
-  /* ---------- Search bar ---------- */
-  .search-row {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 28px;
-  }
-  .search-bar {
-    display: flex;
-    gap: 8px;
-    width: 100%;
-    max-width: 480px;
-  }
-  .search-bar input[type="text"] {
-    flex: 1;
-    font-family: Georgia, serif;
-    font-size: 14px;
-    padding: 8px 10px;
-    border: 1px solid #999;
-    border-radius: 4px;
-  }
-  .search-bar button {
-    font-family: Georgia, serif;
-    font-size: 14px;
-    padding: 8px 14px;
-    border: 1px solid #000;
-    background: #000;
-    color: #fff;
-    border-radius: 4px;
-    cursor: pointer;
-  }
-  .search-bar button:hover { background: #333; }
 
   /* ---------- Section headers (shared look) ---------- */
   .hero-trending h2,
   .category-section h2,
   .big-trending h2,
-  .compass-widget h2,
-  .rundown-widget h2 {
+  .compass-widget h2 {
     font-size: 15px;
+    font-weight: 700;
     letter-spacing: 1px;
     text-transform: uppercase;
     border-bottom: 2px solid #000;
     padding-bottom: 4px;
     margin: 0 0 10px 0;
     text-align: center;
-  }
-
-  /* ---------- Daily rundown ---------- */
-  .rundown-widget {
-    margin-bottom: 32px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    padding: 16px;
-    background: #fafafa;
-  }
-  .rundown-tabs {
-    display: flex;
-    justify-content: center;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 14px;
-  }
-  .rundown-tab {
-    font-family: Georgia, serif;
-    font-size: 13px;
-    padding: 6px 12px;
-    border: 1px solid #999;
-    background: #fff;
-    border-radius: 4px;
-    cursor: pointer;
-  }
-  .rundown-tab.active { background: #000; color: #fff; border-color: #000; }
-  .rundown-text {
-    max-width: 720px;
-    margin: 0 auto;
-    font-size: 15px;
-    white-space: pre-wrap;
-  }
-  .rundown-play-btn {
-    display: block;
-    margin: 14px auto 0;
   }
 
   /* ---------- Hero: 5 across, 2 down ---------- */
@@ -406,18 +336,18 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
     align-items: center;
     justify-content: center;
     font-size: 11px;
-    font-weight: bold;
+    font-weight: 700;
     text-align: center;
     padding: 6px;
     color: #333;
   }
-  .hero-title { font-weight: bold; font-size: 13px; margin-top: 6px; color: var(--link); text-align: center; }
+  .hero-title { font-weight: 700; font-size: 14px; margin-top: 6px; color: var(--link); text-align: center; }
   .hero-meta { font-size: 11px; color: var(--meta); text-align: center; }
 
   /* ---------- Per-story summary/audio controls ---------- */
   .summary-controls { margin-top: 6px; }
   .summarize-btn, .play-btn {
-    font-family: Georgia, serif;
+    font-family: var(--font);
     font-size: 11px;
     padding: 3px 8px;
     border: 1px solid #999;
@@ -469,7 +399,7 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
   }
   .compass-zone-label span {
     font-size: 9px;
-    font-weight: bold;
+    font-weight: 700;
     line-height: 1.1;
     color: #1a1a1a;
     text-shadow: 0 0 3px rgba(255, 255, 255, 0.7);
@@ -477,7 +407,7 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
   .compass-axis-label {
     position: absolute;
     font-size: 11px;
-    font-weight: bold;
+    font-weight: 700;
     color: #000;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -504,35 +434,29 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
   .compass-results {
     flex: 1;
     min-width: 280px;
-    max-width: 560px;
+    max-width: 480px;
   }
   .compass-results-heading {
     font-size: 14px;
+    font-weight: 700;
     letter-spacing: 0.5px;
     text-transform: uppercase;
     border-bottom: 2px solid #000;
     padding-bottom: 4px;
     margin: 0 0 12px 0;
   }
-  .compass-result-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
-  }
-  @media (max-width: 520px) {
-    .compass-result-grid { grid-template-columns: repeat(2, 1fr); }
-  }
-  .compass-result-card { color: inherit; text-decoration: none; display: block; }
-  .compass-result-thumb {
+  .compass-featured { color: inherit; text-decoration: none; display: block; margin-bottom: 16px; }
+  .compass-featured-thumb {
     width: 100%;
+    max-width: 280px;
     aspect-ratio: 16 / 10;
     overflow: hidden;
     background: #eee;
     border: 1px solid #ccc;
   }
-  .compass-result-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .compass-result-title { font-weight: bold; font-size: 11px; margin-top: 4px; color: var(--link); }
-  .compass-result-meta { font-size: 10px; color: var(--meta); }
+  .compass-featured-title { font-weight: 700; font-size: 16px; margin-top: 6px; color: var(--link); }
+  .compass-featured-meta { font-size: 11px; color: var(--meta); }
+  .compass-list .headline { margin-bottom: 10px; }
 
   /* ---------- Main layout: categories, centered ---------- */
   .main-layout {
@@ -564,7 +488,7 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
   .headline { margin-bottom: 14px; }
   .headline a {
     color: var(--link);
-    font-weight: bold;
+    font-weight: 700;
     text-decoration: none;
     font-size: 15px;
   }
@@ -602,22 +526,6 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
       </div>
     </div>
   </header>
-
-  <div class="search-row">
-    <form class="search-bar" action="/search" method="GET">
-      <input type="text" name="q" placeholder="Search headlines or sources..." autocomplete="off" />
-      <button type="submit">Search</button>
-    </form>
-  </div>
-
-  <section class="rundown-widget">
-    <h2>Daily Rundown</h2>
-    <div class="rundown-tabs">
-      ${rundownTabsHtml}
-    </div>
-    <div class="rundown-text" id="rundownText"><p class="empty">Pick a scope above to generate today's rundown.</p></div>
-    <button type="button" class="play-btn rundown-play-btn" id="rundownPlayBtn" style="display:none" onclick="playRundownAudio()">&#128266; Listen</button>
-  </section>
 
   <section class="hero-trending">
     <h2>U.S. Politics &middot; World / Geopolitics &middot; Crime &amp; Legal</h2>
@@ -660,6 +568,23 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
   </section>
 
   <script>
+    // Some outlets' CDNs (e.g. Variety, Deadline) hotlink-block image
+    // requests from other sites -- the URL is real (our server-side
+    // og:image scrape found it fine), but the browser's own <img> request
+    // gets refused. Swap to the same colored placeholder used when there
+    // was never a URL at all, rather than showing a broken-image icon.
+    function handleImgError(img) {
+      const thumb = img.parentElement;
+      const div = document.createElement("div");
+      div.className = "thumb-placeholder";
+      div.style.background = thumb.dataset.fallbackColor;
+      const span = document.createElement("span");
+      span.textContent = thumb.dataset.fallbackLabel;
+      div.appendChild(span);
+      thumb.innerHTML = "";
+      thumb.appendChild(div);
+    }
+
     async function loadSummary(btn) {
       const id = btn.dataset.clusterId;
       btn.disabled = true;
@@ -686,30 +611,6 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
     function playSummaryAudio(btn) {
       const id = btn.dataset.clusterId;
       new Audio("/api/summary/" + id + "/audio").play();
-    }
-
-    let currentRundownScope = null;
-    async function loadRundown(scope, btn) {
-      currentRundownScope = scope;
-      document.querySelectorAll(".rundown-tab").forEach(function (b) { b.classList.remove("active"); });
-      btn.classList.add("active");
-      const textEl = document.getElementById("rundownText");
-      const playBtn = document.getElementById("rundownPlayBtn");
-      textEl.innerHTML = '<p class="empty">Loading...</p>';
-      playBtn.style.display = "none";
-      try {
-        const res = await fetch("/api/rundown?scope=" + scope);
-        const data = await res.json();
-        textEl.textContent = data.text || "No stories in this quadrant yet.";
-        if (data.text) playBtn.style.display = "inline-block";
-      } catch (err) {
-        textEl.textContent = "Could not load rundown.";
-      }
-    }
-
-    function playRundownAudio() {
-      if (!currentRundownScope) return;
-      new Audio("/api/rundown/audio?scope=" + currentRundownScope).play();
     }
 
     (function () {
@@ -774,6 +675,12 @@ app.get("/", async (req, res) => {
       ...CATEGORIES.map((cat) => getTrendingClusters({ category: cat.slug, limit: 10 })),
     ]);
 
+    // Guarantees the front 10 hero thumbnails actually show something real
+    // rather than depending on whenever `npm run ingest` last ran --
+    // fetches og:image live for any of these 10 still missing one, and
+    // persists it so this cost is paid at most once per story.
+    await backfillImagesForClusters(heroClusters);
+
     const categorySections = CATEGORIES.map((cat, i) => ({
       label: cat.label,
       clusters: categoryClusters[i],
@@ -791,57 +698,12 @@ app.get("/section/:category", async (req, res) => {
     const clusters = await getTrendingClusters({ category: req.params.category, limit: 50 });
     const meta = CATEGORIES.find((c) => c.slug === req.params.category);
     res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>${escapeHtml(meta?.label || req.params.category)} — DirectioNews</title>
-      <style>body{font-family:Georgia,serif;max-width:900px;margin:0 auto;padding:20px;}
-      .headline{margin-bottom:10px;} .headline a{color:#0000cc;font-weight:bold;text-decoration:none;font-size:16px;}
+      <style>body{font-family:'Roboto Condensed',Arial,sans-serif;max-width:900px;margin:0 auto;padding:20px;}
+      .headline{margin-bottom:10px;} .headline a{color:#0000cc;font-weight:700;text-decoration:none;font-size:16px;}
       .headline a:visited{color:#551a8b;} .meta{color:#666;font-size:12px;margin-left:6px;}</style></head>
       <body><h1>${escapeHtml(meta?.label || req.params.category)}</h1>${renderHeadlineList(clusters)}</body></html>`);
   } catch (err) {
     console.error("[/section] error:", err);
-    res.status(500).send("Something broke. Check server logs.");
-  }
-});
-
-app.get("/search", async (req, res) => {
-  try {
-    const q = (req.query.q || "").toString();
-    const clusters = q ? await searchClusters({ query: q, limit: 40 }) : [];
-    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Search: ${escapeHtml(q)} — DirectioNews</title>
-      <style>body{font-family:Georgia,serif;max-width:900px;margin:0 auto;padding:20px;}
-      .headline{margin-bottom:14px;} .headline a{color:#0000cc;font-weight:bold;text-decoration:none;font-size:16px;}
-      .headline a:visited{color:#551a8b;} .meta{color:#666;font-size:12px;margin-left:6px;}
-      .summary-controls{margin-top:6px;} .summarize-btn,.play-btn{font-family:Georgia,serif;font-size:11px;padding:3px 8px;border:1px solid #999;background:#fff;border-radius:3px;cursor:pointer;}
-      .summary-text{font-size:12px;color:#333;margin:6px 0;line-height:1.4;}
-      form{margin-bottom:20px;display:flex;gap:8px;}
-      input[type=text]{flex:1;font-size:14px;padding:8px;border:1px solid #999;border-radius:4px;}
-      button{font-size:14px;padding:8px 14px;border:1px solid #000;background:#000;color:#fff;border-radius:4px;cursor:pointer;}
-      </style></head>
-      <body>
-      <h1>Search</h1>
-      <form action="/search" method="GET"><input type="text" name="q" value="${escapeHtml(q)}" autocomplete="off" /><button type="submit">Search</button></form>
-      ${q ? renderHeadlineList(clusters) : `<p class="empty">Search for a headline keyword or a source name (e.g. "Politico").</p>`}
-      <script>
-        async function loadSummary(btn) {
-          const id = btn.dataset.clusterId;
-          btn.disabled = true; btn.textContent = "Loading...";
-          try {
-            const res = await fetch("/api/summary/" + id);
-            const data = await res.json();
-            document.getElementById("summary-" + id).textContent = data.summary || "No summary available.";
-            if (data.summary) {
-              btn.style.display = "none";
-              const playBtn = document.querySelector('.play-btn[data-cluster-id="' + id + '"]');
-              if (playBtn) playBtn.style.display = "inline-block";
-            } else { btn.disabled = false; btn.textContent = "Summarize"; }
-          } catch (err) { btn.disabled = false; btn.textContent = "Summarize"; }
-        }
-        function playSummaryAudio(btn) {
-          const id = btn.dataset.clusterId;
-          new Audio("/api/summary/" + id + "/audio").play();
-        }
-      </script>
-      </body></html>`);
-  } catch (err) {
-    console.error("[/search] error:", err);
     res.status(500).send("Something broke. Check server logs.");
   }
 });
@@ -852,7 +714,7 @@ app.get("/api/compass", async (req, res) => {
     const authoritarian = Math.min(1, Math.max(-1, Number(req.query.authoritarian) || 0));
     const zone = findZoneForPoint(economic, authoritarian);
     const items = await searchNewsForZone(zone);
-    res.type("html").send(renderCompassResultCards(zone.label, items));
+    res.type("html").send(renderCompassResults(zone.label, items));
   } catch (err) {
     console.error("[api/compass] error:", err);
     res.status(500).send(`<p class="empty">Something broke loading results.</p>`);
@@ -881,30 +743,6 @@ app.get("/api/summary/:clusterId/audio", async (req, res) => {
     res.set("Content-Type", content_type).send(audio_data);
   } catch (err) {
     console.error("[api/summary/audio] error:", err);
-    res.status(500).send("Could not generate audio");
-  }
-});
-
-app.get("/api/rundown", async (req, res) => {
-  const scope = RUNDOWN_SCOPE_VALUES.has(req.query.scope) ? req.query.scope : "all";
-  try {
-    const text = await getOrGenerateDailyRundown(scope);
-    res.json({ text });
-  } catch (err) {
-    console.error("[api/rundown] error:", err);
-    res.status(500).json({ error: "internal_error" });
-  }
-});
-
-app.get("/api/rundown/audio", async (req, res) => {
-  const scope = RUNDOWN_SCOPE_VALUES.has(req.query.scope) ? req.query.scope : "all";
-  try {
-    const text = await getOrGenerateDailyRundown(scope);
-    if (!text) return res.status(404).send("No rundown available");
-    const { audio_data, content_type } = await getOrSynthesizeAudio(text);
-    res.set("Content-Type", content_type).send(audio_data);
-  } catch (err) {
-    console.error("[api/rundown/audio] error:", err);
     res.status(500).send("Could not generate audio");
   }
 });
@@ -940,7 +778,7 @@ app.get("/admin/song", requireAdminKey, async (req, res) => {
 
   res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Song Schedule Admin</title>
     <style>
-      body{font-family:Georgia,serif;max-width:700px;margin:40px auto;padding:0 20px;}
+      body{font-family:'Roboto Condensed',Arial,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;}
       table{width:100%;border-collapse:collapse;margin-top:20px;}
       td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left;font-size:14px;}
       input,button{font-size:14px;padding:6px;}
@@ -953,7 +791,7 @@ app.get("/admin/song", requireAdminKey, async (req, res) => {
       Spotify URL: <code>open.spotify.com/track/&lt;THIS PART&gt;</code></p>
       <form class="add" method="POST" action="/admin/song?key=${escapeHtml(req.query.key)}">
         <div><label>Date</label><input type="date" name="play_date" required /></div>
-        <div><label>Spotify Track ID</label><input type="text" name="track_id" required placeholder="e.g. 1qyFlfPREPbRcS2BNszdYI" size="30" /></div>
+        <div><label>Spotify Track ID</label><input type="text" name="track_id" required placeholder="e.g. 3pclEGdsAxuNaSU7BGgtFb" size="30" /></div>
         <div><label>Label (optional)</label><input type="text" name="label" placeholder="Song &mdash; Artist" size="24" /></div>
         <button type="submit">Save</button>
       </form>
