@@ -69,26 +69,20 @@ function center(zone) {
 }
 
 /**
- * Resolves a clicked (economic, authoritarian) point to a zone. Prefers an
- * exact bounding-box match; if the point falls in a gap between zones (the
- * boxes above don't tile perfectly), falls back to whichever zone's center
- * is closest, so every click always resolves to *something*.
+ * Returns every zone sorted nearest-first to a clicked (economic,
+ * authoritarian) point. The compass UI no longer draws these zones as
+ * visible boxes -- they're purely an internal search-query lookup now --
+ * so there's no bounding-box containment check anymore, just "which
+ * zones are closest to where you clicked." The caller (see
+ * /api/compass in server/index.js) tries these in order and falls
+ * through to the next-nearest one if a zone's live search comes back
+ * empty, so a click anywhere always has a good shot at real results.
  */
-export function findZoneForPoint(economic, authoritarian) {
-  const contained = COMPASS_ZONES.find(
-    (z) => economic >= z.xMin && economic <= z.xMax && authoritarian >= z.yMin && authoritarian <= z.yMax
-  );
-  if (contained) return contained;
-
-  let closest = null;
-  let closestDist = Infinity;
-  for (const zone of COMPASS_ZONES) {
+export function findZonesNearPoint(economic, authoritarian) {
+  return COMPASS_ZONES.map((zone) => {
     const c = center(zone);
-    const dist = Math.hypot(c.x - economic, c.y - authoritarian);
-    if (dist < closestDist) {
-      closestDist = dist;
-      closest = zone;
-    }
-  }
-  return closest;
+    return { zone, distance: Math.hypot(c.x - economic, c.y - authoritarian) };
+  })
+    .sort((a, b) => a.distance - b.distance)
+    .map((entry) => entry.zone);
 }

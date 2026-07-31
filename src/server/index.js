@@ -18,7 +18,7 @@ import {
 } from "../ai/dailySummary.js";
 import { backfillImagesForClusters } from "../ingestion/backfillImages.js";
 import { CATEGORIES } from "../config/categories.js";
-import { COMPASS_ZONES, findZoneForPoint } from "../config/compassZones.js";
+import { findZonesNearPoint } from "../config/compassZones.js";
 
 dotenv.config();
 
@@ -138,20 +138,6 @@ function renderHeroCards(clusters) {
     .join("\n");
 }
 
-// Positions every labeled region from COMPASS_ZONES as an absolutely-placed
-// box over the compass square, driven by the same data used server-side to
-// resolve a click into a zone (config/compassZones.js) -- one source of
-// truth for both the visual layout and the hit-testing.
-function renderCompassZoneLabels() {
-  return COMPASS_ZONES.map((z) => {
-    const left = ((z.xMin + 1) / 2) * 100;
-    const width = ((z.xMax - z.xMin) / 2) * 100;
-    const top = ((1 - z.yMax) / 2) * 100;
-    const height = ((z.yMax - z.yMin) / 2) * 100;
-    return `<div class="compass-zone-label" style="left:${left}%;top:${top}%;width:${width}%;height:${height}%"><span>${escapeHtml(z.label)}</span></div>`;
-  }).join("\n");
-}
-
 // Live web-search results (compassSearch.js, via GNews.io) for a clicked
 // zone, Drudge Report style: the single most-relevant story gets a
 // featured thumbnail+title+link, everything else is a plain headline list
@@ -193,16 +179,16 @@ function renderCompassResults(zoneLabel, items) {
 // only appears if audio actually exists.
 function renderDailySummarySection(dailySummary) {
   if (!dailySummary?.text_content) {
-    return `<section class="daily-summary-widget">
-      <h2>Today's Summary</h2>
+    return `<details class="daily-summary-widget">
+      <summary>Today's Summary</summary>
       <p class="empty">No summary posted yet today.</p>
-    </section>`;
+    </details>`;
   }
-  return `<section class="daily-summary-widget">
-    <h2>Today's Summary</h2>
+  return `<details class="daily-summary-widget">
+    <summary>Today's Summary</summary>
     <p class="daily-summary-text">${escapeHtml(dailySummary.text_content)}</p>
     ${dailySummary.has_audio ? `<button type="button" class="play-btn daily-summary-play-btn" onclick="playDailySummaryAudio()">&#128266; Listen</button>` : ""}
-  </section>`;
+  </details>`;
 }
 
 function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, dailySummary }) {
@@ -354,19 +340,21 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
     padding: 16px 20px;
     background: #fafafa;
   }
-  .daily-summary-widget h2 {
+  .daily-summary-widget summary {
     font-size: 15px;
     font-weight: 700;
     letter-spacing: 1px;
     text-transform: uppercase;
+    cursor: pointer;
+  }
+  .daily-summary-widget[open] summary {
     border-bottom: 2px solid #000;
     padding-bottom: 4px;
-    margin: 0 0 10px 0;
-    text-align: center;
+    margin-bottom: 10px;
   }
   .daily-summary-text {
     max-width: 720px;
-    margin: 0 auto 12px;
+    margin: 12px auto 12px;
     font-size: 15px;
     white-space: pre-wrap;
   }
@@ -449,38 +437,20 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
   .compass-q-ar { top: 0; right: 0; background: #8fd0f0; }
   .compass-q-ll { bottom: 0; left: 0; background: #bfe3b6; }
   .compass-q-lr { bottom: 0; right: 0; background: #f2ee9e; }
-  .compass-zone-label {
-    position: absolute;
-    box-sizing: border-box;
-    border: 1px solid rgba(0, 0, 0, 0.18);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    padding: 2px;
-    pointer-events: none;
-    overflow: hidden;
-  }
-  .compass-zone-label span {
-    font-size: 9px;
-    font-weight: 700;
-    line-height: 1.1;
-    color: #1a1a1a;
-    text-shadow: 0 0 3px rgba(255, 255, 255, 0.7);
-  }
   .compass-axis-label {
     position: absolute;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     color: #000;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     pointer-events: none;
+    text-shadow: 0 0 4px rgba(255, 255, 255, 0.85);
   }
-  .compass-top { top: -20px; left: 50%; transform: translateX(-50%); }
-  .compass-bottom { bottom: -20px; left: 50%; transform: translateX(-50%); }
-  .compass-left { top: 50%; left: -8px; transform: translate(-100%, -50%); text-align: right; }
-  .compass-right { top: 50%; right: -8px; transform: translate(100%, -50%); text-align: left; }
+  .compass-top { top: 10px; left: 50%; transform: translateX(-50%); }
+  .compass-bottom { bottom: 10px; left: 50%; transform: translateX(-50%); }
+  .compass-left { top: 50%; left: 10px; transform: translateY(-50%); }
+  .compass-right { top: 50%; right: 10px; transform: translateY(-50%); }
   .compass-marker {
     position: absolute;
     top: 50%;
@@ -615,11 +585,10 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
         <div class="compass-quadrant compass-q-ar"></div>
         <div class="compass-quadrant compass-q-ll"></div>
         <div class="compass-quadrant compass-q-lr"></div>
-        ${renderCompassZoneLabels()}
         <div class="compass-axis-label compass-top">Authoritarian</div>
         <div class="compass-axis-label compass-bottom">Libertarian</div>
-        <div class="compass-axis-label compass-left">Econ.<br/>Left</div>
-        <div class="compass-axis-label compass-right">Econ.<br/>Right</div>
+        <div class="compass-axis-label compass-left">Econ. Left</div>
+        <div class="compass-axis-label compass-right">Econ. Right</div>
         <div class="compass-marker" id="compassMarker"></div>
       </div>
       <div class="compass-results" id="compassResults">
@@ -805,8 +774,23 @@ app.get("/api/compass", async (req, res) => {
   try {
     const economic = Math.min(1, Math.max(-1, Number(req.query.economic) || 0));
     const authoritarian = Math.min(1, Math.max(-1, Number(req.query.authoritarian) || 0));
-    const zone = findZoneForPoint(economic, authoritarian);
-    const items = await searchNewsForZone(zone);
+    const nearbyZones = findZonesNearPoint(economic, authoritarian);
+
+    // No visible zone boxes anymore -- this is purely "search the nearest
+    // zone's label, and if that comes up empty, fall through to the next
+    // nearest one" so a click anywhere on the blank compass has a real
+    // shot at results, not just the single nearest label. Capped at 3
+    // tries to keep GNews' free-tier daily quota in check.
+    let zone = nearbyZones[0];
+    let items = [];
+    for (const candidate of nearbyZones.slice(0, 3)) {
+      items = await searchNewsForZone(candidate);
+      if (items.length > 0) {
+        zone = candidate;
+        break;
+      }
+    }
+
     res.type("html").send(renderCompassResults(zone.label, items));
   } catch (err) {
     console.error("[api/compass] error:", err);
