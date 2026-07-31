@@ -1,52 +1,39 @@
-import Parser from "rss-parser";
-import { googleNewsFeed } from "../config/sources.js";
+const GNEWS_API_URL = "https://gnews.io/api/v4/search";
 
-const parser = new Parser({
-  timeout: 15000,
-  headers: { "User-Agent": "NewsTheBot/0.1 (+https://example.com/bot)" },
-});
-
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min -- keeps repeat clicks on the same zone fast/cheap
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min -- keeps repeat clicks on the same zone fast/cheap and off the free-tier daily quota
 const cache = new Map(); // zone label -> { expiresAt, items }
-
-// Google News RSS item titles are formatted "HEADLINE - Outlet Name" --
-// this is the only place a per-item outlet name is available (the feed
-// itself is one query across many outlets, unlike the curated single-outlet
-// feeds in config/sources.js).
-function splitTitleAndOutlet(rawTitle) {
-  const idx = rawTitle.lastIndexOf(" - ");
-  if (idx === -1) return { title: rawTitle, outlet: "Unknown" };
-  return { title: rawTitle.slice(0, idx), outlet: rawTitle.slice(idx + 3) };
-}
 
 /**
  * Live web search for news matching a compass zone's label, e.g.
- * "Activism" or "Anarcho-Capitalism" -- this is a real-time Google News
- * query (same technique already used for Crime/Legal, Climate/Disasters,
- * etc. in config/sources.js), not a filter over already-ingested articles.
+ * "Activism" or "Anarcho-Capitalism", via the GNews.io API -- a real-time
+ * search, not a filter over already-ingested articles. Unlike Google News
+ * RSS (used elsewhere in this app for whole-category feeds), GNews hands
+ * back the real article URL and a real thumbnail image directly, so no
+ * og:image scraping is needed here.
  *
  * Diversifies one story per outlet, same rule as the hero grid
  * (getTrendingClustersPriority in ranking/trending.js) -- take results in
- * the feed's own relevance order, skip an outlet once it's already used.
- *
- * No thumbnail scraping here (deliberately): every `link` Google News RSS
- * hands back is one of its own proprietary redirect tokens
- * (news.google.com/rss/articles/...), not the real article URL -- Google
- * resolves those client-side via JS, so a server-side fetch just downloads
- * Google's own News app shell and its og:image is Google's icon, not the
- * article's. That's actively misleading, not merely missing, so items are
- * returned with image: null and the renderer's honest outlet-colored
- * placeholder is used instead. (Decoding Google's internal redirect
- * format would mean reverse-engineering an undocumented private API --
- * not something to build a real feature on top of.)
+ * the API's own relevance order, skip an outlet once it's already used.
  */
-export async function searchNewsForZone(zone, { limit = 12 } = {}) {
+export async function searchNewsForZone(zone, { limit = 10 } = {}) {
   const cached = cache.get(zone.label);
   if (cached && cached.expiresAt > Date.now()) return cached.items;
 
-  let feed;
+  const apiKey = process.env.GNEWS_API_KEY;
+  if (!apiKey) {
+    console.error("[compassSearch] GNEWS_API_KEY not set");
+    return [];
+  }
+
+  const query = zone.query || zone.label;
+  // Free-tier GNews caps `max` at 10 results per request.
+  const url = `${GNEWS_API_URL}?q=${encodeURIComponent(query)}&lang=en&max=${Math.min(limit, 10)}&apikey=${apiKey}`;
+
+  let data;
   try {
-    feed = await parser.parseURL(googleNewsFeed(zone.query || zone.label));
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`GNews API ${res.status}: ${await res.text()}`);
+    data = await res.json();
   } catch (err) {
     console.error(`[compassSearch] FAILED zone="${zone.label}": ${err.message}`);
     return [];
@@ -54,17 +41,20 @@ export async function searchNewsForZone(zone, { limit = 12 } = {}) {
 
   const usedOutlets = new Set();
   const picked = [];
-  for (const item of feed.items ?? []) {
+  for (const article of data.articles ?? []) {
     if (picked.length >= limit) break;
-    const rawTitle = (item.title || "").trim();
-    const url = (item.link || "").trim();
-    if (!rawTitle || !url) continue;
-
-    const { title, outlet } = splitTitleAndOutlet(rawTitle);
+    if (!article.title || !article.url) continue;
+    const outlet = article.source?.name || "Unknown";
     if (usedOutlets.has(outlet)) continue;
 
     usedOutlets.add(outlet);
-    picked.push({ title, url, outlet, publishedAt: item.isoDate || item.pubDate || null, image: null });
+    picked.push({
+      title: article.title,
+      url: article.url,
+      outlet,
+      publishedAt: article.publishedAt || null,
+      image: article.image || null,
+    });
   }
 
   cache.set(zone.label, { expiresAt: Date.now() + CACHE_TTL_MS, items: picked });

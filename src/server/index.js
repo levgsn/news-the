@@ -1,4 +1,5 @@
 import express from "express";
+import multer from "multer";
 import dotenv from "dotenv";
 import {
   getTrendingClusters,
@@ -8,6 +9,13 @@ import { getTodaysSong, getUpcomingSongs, setSongForDate, deleteSongForDate } fr
 import { searchNewsForZone } from "../ranking/compassSearch.js";
 import { getOrGenerateClusterSummary } from "../ai/summaries.js";
 import { getOrSynthesizeAudio } from "../ai/audioCache.js";
+import {
+  getTodaysSummary,
+  getTodaysSummaryAudio,
+  generateAiDailySummary,
+  generateAiDailySummaryAudio,
+  setUserDailySummary,
+} from "../ai/dailySummary.js";
 import { backfillImagesForClusters } from "../ingestion/backfillImages.js";
 import { CATEGORIES } from "../config/categories.js";
 import { COMPASS_ZONES, findZoneForPoint } from "../config/compassZones.js";
@@ -16,6 +24,11 @@ dotenv.config();
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
+// Memory storage (not disk) since the recording gets stored straight into
+// Postgres as BYTEA -- Railway's filesystem is ephemeral anyway. 25MB caps
+// a several-minutes-long voice recording without allowing huge uploads;
+// this route is behind the ADMIN_KEY gate regardless.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY || "";
 
@@ -78,6 +91,7 @@ function renderSummaryControls(clusterId) {
     <button class="summarize-btn" type="button" data-cluster-id="${clusterId}" onclick="loadSummary(this)">Summarize</button>
     <div class="summary-text" id="summary-${clusterId}"></div>
     <button class="play-btn" type="button" data-cluster-id="${clusterId}" style="display:none" onclick="playSummaryAudio(this)">&#128266; Listen</button>
+    <button class="close-btn" type="button" data-cluster-id="${clusterId}" style="display:none" onclick="closeSummary(this)">Close</button>
   </div>`;
 }
 
@@ -138,13 +152,12 @@ function renderCompassZoneLabels() {
   }).join("\n");
 }
 
-// Live web-search results (compassSearch.js) for a clicked zone, Drudge
-// Report style: the single most-relevant story gets a featured
-// thumbnail+title+link, everything else is a plain headline list below.
-// No thumbnails on the list items -- see compassSearch.js for why (Google
-// News links are redirect tokens, not real article URLs, so scraping them
-// only ever returns Google's own icon). The one featured placeholder is an
-// honest outlet-colored card, not a fake photo.
+// Live web-search results (compassSearch.js, via GNews.io) for a clicked
+// zone, Drudge Report style: the single most-relevant story gets a
+// featured thumbnail+title+link, everything else is a plain headline list
+// below. GNews returns real article URLs and real thumbnail images, so
+// the featured card shows an actual photo when available (with the same
+// hotlink-failure fallback used on the hero grid).
 function renderCompassResults(zoneLabel, items) {
   const heading = `<h3 class="compass-results-heading">${escapeHtml(zoneLabel)}</h3>`;
   if (items.length === 0) {
@@ -152,10 +165,11 @@ function renderCompassResults(zoneLabel, items) {
   }
 
   const [featured, ...rest] = items;
+  const featuredThumb = featured.image
+    ? `<img src="${escapeHtml(featured.image)}" alt="" loading="lazy" onerror="handleImgError(this)" />`
+    : `<div class="thumb-placeholder" style="background:${placeholderColor(featured.outlet)}"><span>${escapeHtml(featured.outlet)}</span></div>`;
   const featuredHtml = `<a class="compass-featured" href="${escapeHtml(featured.url)}" target="_blank" rel="noopener">
-    <div class="compass-featured-thumb">
-      <div class="thumb-placeholder" style="background:${placeholderColor(featured.outlet)}"><span>${escapeHtml(featured.outlet)}</span></div>
-    </div>
+    <div class="compass-featured-thumb" data-fallback-color="${placeholderColor(featured.outlet)}" data-fallback-label="${escapeHtml(featured.outlet)}">${featuredThumb}</div>
     <div class="compass-featured-title">${escapeHtml(featured.title)}</div>
     <div class="compass-featured-meta">${escapeHtml(featured.outlet)}</div>
   </a>`;
@@ -172,7 +186,26 @@ function renderCompassResults(zoneLabel, items) {
   return `${heading}${featuredHtml}${listHtml ? `<div class="compass-list">${listHtml}</div>` : ""}`;
 }
 
-function renderPage({ heroClusters, categorySections, bigTrending, todaysSong }) {
+// Public-facing "Today's Summary" -- either AI-generated or the site
+// owner's own recorded transcript (managed via /admin/summary), whichever
+// was saved most recently. Text is rendered server-side directly (no
+// client fetch needed, it's a cheap single-row lookup); the Listen button
+// only appears if audio actually exists.
+function renderDailySummarySection(dailySummary) {
+  if (!dailySummary?.text_content) {
+    return `<section class="daily-summary-widget">
+      <h2>Today's Summary</h2>
+      <p class="empty">No summary posted yet today.</p>
+    </section>`;
+  }
+  return `<section class="daily-summary-widget">
+    <h2>Today's Summary</h2>
+    <p class="daily-summary-text">${escapeHtml(dailySummary.text_content)}</p>
+    ${dailySummary.has_audio ? `<button type="button" class="play-btn daily-summary-play-btn" onclick="playDailySummaryAudio()">&#128266; Listen</button>` : ""}
+  </section>`;
+}
+
+function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, dailySummary }) {
   const categoriesHtml = categorySections
     .map(
       ({ label, clusters }) => `<section class="category-section">
@@ -197,8 +230,8 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
   :root {
     --ink: #000;
     --paper: #fff;
-    --link: #0000cc;
-    --visited: #551a8b;
+    --link: #000;
+    --visited: #000;
     --meta: #666;
     --font: 'Roboto Condensed', Arial, Helvetica, sans-serif;
   }
@@ -238,6 +271,10 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
     letter-spacing: 0.5px;
     margin-top: 2px;
   }
+  .social-links { display: flex; gap: 12px; margin-top: 10px; }
+  .social-link { color: #000; display: inline-flex; }
+  .social-link svg { width: 18px; height: 18px; }
+  .social-link:hover { opacity: 0.6; }
   .header-right {
     display: flex;
     flex-direction: column;
@@ -309,6 +346,32 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
     text-align: center;
   }
 
+  /* ---------- Today's Summary ---------- */
+  .daily-summary-widget {
+    margin-bottom: 32px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 16px 20px;
+    background: #fafafa;
+  }
+  .daily-summary-widget h2 {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-bottom: 2px solid #000;
+    padding-bottom: 4px;
+    margin: 0 0 10px 0;
+    text-align: center;
+  }
+  .daily-summary-text {
+    max-width: 720px;
+    margin: 0 auto 12px;
+    font-size: 15px;
+    white-space: pre-wrap;
+  }
+  .daily-summary-play-btn { display: block; margin: 0 auto; }
+
   /* ---------- Hero: 5 across, 2 down ---------- */
   .hero-trending { margin-bottom: 32px; }
   .hero-grid {
@@ -346,7 +409,7 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
 
   /* ---------- Per-story summary/audio controls ---------- */
   .summary-controls { margin-top: 6px; }
-  .summarize-btn, .play-btn {
+  .summarize-btn, .play-btn, .close-btn {
     font-family: var(--font);
     font-size: 11px;
     padding: 3px 8px;
@@ -354,9 +417,10 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
     background: #fff;
     border-radius: 3px;
     cursor: pointer;
+    margin-right: 4px;
   }
   .hero-card .summary-controls { text-align: center; }
-  .summarize-btn:hover, .play-btn:hover { background: #eee; }
+  .summarize-btn:hover, .play-btn:hover, .close-btn:hover { background: #eee; }
   .summarize-btn:disabled { opacity: 0.6; cursor: default; }
   .summary-text { font-size: 12px; color: #333; margin: 6px 0; line-height: 1.4; }
 
@@ -454,6 +518,7 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
     background: #eee;
     border: 1px solid #ccc;
   }
+  .compass-featured-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .compass-featured-title { font-weight: 700; font-size: 16px; margin-top: 6px; color: var(--link); }
   .compass-featured-meta { font-size: 11px; color: var(--meta); }
   .compass-list .headline { margin-bottom: 10px; }
@@ -510,6 +575,11 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
     <div class="brand">
       <h1>DirectioNews</h1>
       <div class="subtitle">Trending across ${heroClusters.length + bigTrending.length} stories &middot; refreshed continuously</div>
+      <div class="social-links">
+        <a href="#" class="social-link" aria-label="Instagram"><svg viewBox="0 0 24 24"><rect x="2.5" y="2.5" width="19" height="19" rx="5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="17.5" cy="6.5" r="1.3" fill="currentColor"/></svg></a>
+        <a href="#" class="social-link" aria-label="X"><svg viewBox="0 0 24 24"><path d="M3.5 3.5l17 17M20.5 3.5l-17 17" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></a>
+        <a href="#" class="social-link" aria-label="TikTok"><svg viewBox="0 0 24 24"><path d="M15 3v10.8a3.7 3.7 0 1 1-3.2-3.66V13a1.6 1.6 0 1 0 1.6 1.6V3h1.6z" fill="currentColor"/><path d="M15 3a5.2 5.2 0 0 0 5 5V6.4A3.6 3.6 0 0 1 16.6 3H15z" fill="currentColor"/></svg></a>
+      </div>
     </div>
     <div class="header-right">
       <div class="glitch" data-text="Direct Your News">Direct Your News</div>
@@ -526,6 +596,8 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
       </div>
     </div>
   </header>
+
+  ${renderDailySummarySection(dailySummary)}
 
   <section class="hero-trending">
     <h2>U.S. Politics &middot; World / Geopolitics &middot; Crime &amp; Legal</h2>
@@ -597,6 +669,8 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
           btn.style.display = "none";
           const playBtn = document.querySelector('.play-btn[data-cluster-id="' + id + '"]');
           if (playBtn) playBtn.style.display = "inline-block";
+          const closeBtn = document.querySelector('.close-btn[data-cluster-id="' + id + '"]');
+          if (closeBtn) closeBtn.style.display = "inline-block";
         } else {
           btn.disabled = false;
           btn.textContent = "Summarize";
@@ -611,6 +685,24 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
     function playSummaryAudio(btn) {
       const id = btn.dataset.clusterId;
       new Audio("/api/summary/" + id + "/audio").play();
+    }
+
+    function playDailySummaryAudio() {
+      new Audio("/api/daily-summary/audio").play();
+    }
+
+    function closeSummary(btn) {
+      const id = btn.dataset.clusterId;
+      document.getElementById("summary-" + id).textContent = "";
+      btn.style.display = "none";
+      const playBtn = document.querySelector('.play-btn[data-cluster-id="' + id + '"]');
+      if (playBtn) playBtn.style.display = "none";
+      const summarizeBtn = document.querySelector('.summarize-btn[data-cluster-id="' + id + '"]');
+      if (summarizeBtn) {
+        summarizeBtn.style.display = "inline-block";
+        summarizeBtn.disabled = false;
+        summarizeBtn.textContent = "Summarize";
+      }
     }
 
     (function () {
@@ -668,10 +760,11 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong })
 
 app.get("/", async (req, res) => {
   try {
-    const [heroClusters, bigTrending, todaysSong, ...categoryClusters] = await Promise.all([
+    const [heroClusters, bigTrending, todaysSong, dailySummary, ...categoryClusters] = await Promise.all([
       getTrendingClustersPriority({ tiers: HERO_TIERS, limit: 10 }),
       getTrendingClusters({ limit: 40 }),
       getTodaysSong(),
+      getTodaysSummary(),
       ...CATEGORIES.map((cat) => getTrendingClusters({ category: cat.slug, limit: 10 })),
     ]);
 
@@ -686,7 +779,7 @@ app.get("/", async (req, res) => {
       clusters: categoryClusters[i],
     }));
 
-    res.send(renderPage({ heroClusters, categorySections, bigTrending, todaysSong }));
+    res.send(renderPage({ heroClusters, categorySections, bigTrending, todaysSong, dailySummary }));
   } catch (err) {
     console.error("[/] error:", err);
     res.status(500).send("Something broke. Check server logs.");
@@ -699,8 +792,8 @@ app.get("/section/:category", async (req, res) => {
     const meta = CATEGORIES.find((c) => c.slug === req.params.category);
     res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>${escapeHtml(meta?.label || req.params.category)} — DirectioNews</title>
       <style>body{font-family:'Roboto Condensed',Arial,sans-serif;max-width:900px;margin:0 auto;padding:20px;}
-      .headline{margin-bottom:10px;} .headline a{color:#0000cc;font-weight:700;text-decoration:none;font-size:16px;}
-      .headline a:visited{color:#551a8b;} .meta{color:#666;font-size:12px;margin-left:6px;}</style></head>
+      .headline{margin-bottom:10px;} .headline a{color:#000;font-weight:700;text-decoration:none;font-size:16px;}
+      .headline a:visited{color:#000;} .meta{color:#666;font-size:12px;margin-left:6px;}</style></head>
       <body><h1>${escapeHtml(meta?.label || req.params.category)}</h1>${renderHeadlineList(clusters)}</body></html>`);
   } catch (err) {
     console.error("[/section] error:", err);
@@ -747,6 +840,17 @@ app.get("/api/summary/:clusterId/audio", async (req, res) => {
   }
 });
 
+app.get("/api/daily-summary/audio", async (req, res) => {
+  try {
+    const audio = await getTodaysSummaryAudio();
+    if (!audio) return res.status(404).send("No audio available today");
+    res.set("Content-Type", audio.content_type).send(audio.audio_data);
+  } catch (err) {
+    console.error("[api/daily-summary/audio] error:", err);
+    res.status(500).send("Could not load audio");
+  }
+});
+
 // --- Admin: song schedule ---------------------------------------------------
 // Lightweight shared-secret gate (no login system) — set ADMIN_KEY in .env
 // and visit /admin/song?key=YOUR_KEY. Good enough for a low-stakes internal
@@ -760,59 +864,163 @@ function requireAdminKey(req, res, next) {
 }
 
 app.get("/admin/song", requireAdminKey, async (req, res) => {
-  const upcoming = await getUpcomingSongs();
-  const rows = upcoming
-    .map((s) => {
-      const date = new Date(s.play_date).toISOString().slice(0, 10);
-      return `<tr>
-        <td>${escapeHtml(date)}</td>
-        <td>${escapeHtml(s.track_id)}</td>
-        <td>${escapeHtml(s.label || "")}</td>
-        <td><form method="POST" action="/admin/song/delete?key=${escapeHtml(req.query.key)}" style="display:inline">
-          <input type="hidden" name="play_date" value="${escapeHtml(date)}" />
-          <button type="submit">Remove</button>
-        </form></td>
-      </tr>`;
-    })
-    .join("");
+  try {
+    const upcoming = await getUpcomingSongs();
+    const rows = upcoming
+      .map((s) => {
+        const date = new Date(s.play_date).toISOString().slice(0, 10);
+        return `<tr>
+          <td>${escapeHtml(date)}</td>
+          <td>${escapeHtml(s.track_id)}</td>
+          <td>${escapeHtml(s.label || "")}</td>
+          <td><form method="POST" action="/admin/song/delete?key=${escapeHtml(req.query.key)}" style="display:inline">
+            <input type="hidden" name="play_date" value="${escapeHtml(date)}" />
+            <button type="submit">Remove</button>
+          </form></td>
+        </tr>`;
+      })
+      .join("");
 
-  res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Song Schedule Admin</title>
-    <style>
-      body{font-family:'Roboto Condensed',Arial,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;}
-      table{width:100%;border-collapse:collapse;margin-top:20px;}
-      td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left;font-size:14px;}
-      input,button{font-size:14px;padding:6px;}
-      form.add{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:16px;}
-      label{font-size:12px;color:#555;display:block;}
-    </style></head>
-    <body>
-      <h1>Today's Song &mdash; Schedule</h1>
-      <p>Add or change the song for any future date. Find a track's ID in its
-      Spotify URL: <code>open.spotify.com/track/&lt;THIS PART&gt;</code></p>
-      <form class="add" method="POST" action="/admin/song?key=${escapeHtml(req.query.key)}">
-        <div><label>Date</label><input type="date" name="play_date" required /></div>
-        <div><label>Spotify Track ID</label><input type="text" name="track_id" required placeholder="e.g. 3pclEGdsAxuNaSU7BGgtFb" size="30" /></div>
-        <div><label>Label (optional)</label><input type="text" name="label" placeholder="Song &mdash; Artist" size="24" /></div>
-        <button type="submit">Save</button>
-      </form>
-      <table>
-        <thead><tr><th>Date</th><th>Track ID</th><th>Label</th><th></th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="4">No upcoming songs scheduled — today falls back to the default track.</td></tr>`}</tbody>
-      </table>
-    </body></html>`);
+    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Song Schedule Admin</title>
+      <style>
+        body{font-family:'Roboto Condensed',Arial,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;}
+        table{width:100%;border-collapse:collapse;margin-top:20px;}
+        td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left;font-size:14px;}
+        input,button{font-size:14px;padding:6px;}
+        form.add{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:16px;}
+        label{font-size:12px;color:#555;display:block;}
+      </style></head>
+      <body>
+        <h1>Today's Song &mdash; Schedule</h1>
+        <p>Add or change the song for any future date. Find a track's ID in its
+        Spotify URL: <code>open.spotify.com/track/&lt;THIS PART&gt;</code></p>
+        <form class="add" method="POST" action="/admin/song?key=${escapeHtml(req.query.key)}">
+          <div><label>Date</label><input type="date" name="play_date" required /></div>
+          <div><label>Spotify Track ID</label><input type="text" name="track_id" required placeholder="e.g. 3pclEGdsAxuNaSU7BGgtFb" size="30" /></div>
+          <div><label>Label (optional)</label><input type="text" name="label" placeholder="Song &mdash; Artist" size="24" /></div>
+          <button type="submit">Save</button>
+        </form>
+        <table>
+          <thead><tr><th>Date</th><th>Track ID</th><th>Label</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="4">No upcoming songs scheduled — today falls back to the default track.</td></tr>`}</tbody>
+        </table>
+      </body></html>`);
+  } catch (err) {
+    console.error("[admin/song] error:", err);
+    res.status(500).send("Something broke. Check server logs.");
+  }
 });
 
 app.post("/admin/song", requireAdminKey, async (req, res) => {
-  const { play_date, track_id, label } = req.body;
-  if (!play_date || !track_id) return res.status(400).send("Missing play_date or track_id");
-  await setSongForDate(play_date, track_id.trim(), (label || "").trim());
-  res.redirect(`/admin/song?key=${encodeURIComponent(req.query.key)}`);
+  try {
+    const { play_date, track_id, label } = req.body;
+    if (!play_date || !track_id) return res.status(400).send("Missing play_date or track_id");
+    await setSongForDate(play_date, track_id.trim(), (label || "").trim());
+    res.redirect(`/admin/song?key=${encodeURIComponent(req.query.key)}`);
+  } catch (err) {
+    console.error("[admin/song POST] error:", err);
+    res.status(500).send("Something broke. Check server logs.");
+  }
 });
 
 app.post("/admin/song/delete", requireAdminKey, async (req, res) => {
-  const { play_date } = req.body;
-  if (play_date) await deleteSongForDate(play_date);
-  res.redirect(`/admin/song?key=${encodeURIComponent(req.query.key)}`);
+  try {
+    const { play_date } = req.body;
+    if (play_date) await deleteSongForDate(play_date);
+    res.redirect(`/admin/song?key=${encodeURIComponent(req.query.key)}`);
+  } catch (err) {
+    console.error("[admin/song/delete] error:", err);
+    res.status(500).send("Something broke. Check server logs.");
+  }
+});
+
+// --- Admin: today's summary --------------------------------------------
+// Same shared-secret gate as /admin/song. Either generate an AI summary
+// from today's trending headlines, or paste your own transcript and/or
+// upload your own voice recording -- whichever was saved most recently
+// (per field) is what the public homepage shows.
+
+app.get("/admin/summary", requireAdminKey, async (req, res) => {
+  try {
+    const current = await getTodaysSummary();
+    const key = escapeHtml(req.query.key);
+    const statusLine = current?.text_content
+      ? `Current text: <strong>${current.text_source === "ai" ? "AI-generated" : "Your recording"}</strong>. Audio: <strong>${current.has_audio ? `set (${current.audio_source})` : "none yet"}</strong>.`
+      : "Nothing set for today yet.";
+
+    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Daily Summary Admin</title>
+      <style>
+        body{font-family:'Roboto Condensed',Arial,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;}
+        textarea{width:100%;font-family:inherit;font-size:14px;padding:8px;box-sizing:border-box;}
+        input,button{font-size:14px;padding:6px;}
+        form{margin-top:20px;padding-top:16px;border-top:1px solid #ddd;}
+        label{font-size:12px;color:#555;display:block;margin-bottom:4px;}
+        blockquote{background:#fafafa;border:1px solid #ddd;padding:12px;font-size:14px;white-space:pre-wrap;}
+        .error-banner{background:#fdecea;border:1px solid #f5c2c0;color:#9c2f2a;padding:10px 12px;font-size:13px;margin-bottom:16px;}
+      </style></head>
+      <body>
+        <h1>Today's Summary &mdash; Admin</h1>
+        ${req.query.error ? `<div class="error-banner">${escapeHtml(req.query.error)}</div>` : ""}
+        <p>${statusLine}</p>
+        ${current?.text_content ? `<blockquote>${escapeHtml(current.text_content)}</blockquote>` : ""}
+
+        <form method="POST" action="/admin/summary/generate?key=${key}">
+          <button type="submit">Generate Text with AI</button>
+        </form>
+
+        <form method="POST" action="/admin/summary/generate-audio?key=${key}">
+          <button type="submit"${current?.text_content ? "" : " disabled"}>Generate AI Audio for Current Text</button>
+        </form>
+
+        <form method="POST" action="/admin/summary?key=${key}" enctype="multipart/form-data">
+          <div><label>Your transcript (leave blank to keep the current text)</label>
+            <textarea name="text" rows="8" placeholder="Paste or write today's transcript..."></textarea>
+          </div>
+          <div style="margin-top:10px"><label>Your voice recording (leave blank to keep the current audio)</label>
+            <input type="file" name="audio" accept="audio/*" />
+          </div>
+          <button type="submit" style="margin-top:10px">Save My Version</button>
+        </form>
+      </body></html>`);
+  } catch (err) {
+    console.error("[admin/summary] error:", err);
+    res.status(500).send("Something broke. Check server logs.");
+  }
+});
+
+app.post("/admin/summary/generate", requireAdminKey, async (req, res) => {
+  try {
+    await generateAiDailySummary();
+    res.redirect(`/admin/summary?key=${encodeURIComponent(req.query.key)}`);
+  } catch (err) {
+    console.error("[admin/summary/generate] error:", err);
+    res.redirect(`/admin/summary?key=${encodeURIComponent(req.query.key)}&error=${encodeURIComponent(err.message)}`);
+  }
+});
+
+app.post("/admin/summary/generate-audio", requireAdminKey, async (req, res) => {
+  try {
+    await generateAiDailySummaryAudio();
+    res.redirect(`/admin/summary?key=${encodeURIComponent(req.query.key)}`);
+  } catch (err) {
+    console.error("[admin/summary/generate-audio] error:", err);
+    res.redirect(`/admin/summary?key=${encodeURIComponent(req.query.key)}&error=${encodeURIComponent(err.message)}`);
+  }
+});
+
+app.post("/admin/summary", requireAdminKey, upload.single("audio"), async (req, res) => {
+  try {
+    const text = (req.body.text || "").trim();
+    await setUserDailySummary({
+      text: text || null,
+      audioBuffer: req.file?.buffer || null,
+      audioContentType: req.file?.mimetype || null,
+    });
+    res.redirect(`/admin/summary?key=${encodeURIComponent(req.query.key)}`);
+  } catch (err) {
+    console.error("[admin/summary] error:", err);
+    res.redirect(`/admin/summary?key=${encodeURIComponent(req.query.key)}&error=${encodeURIComponent(err.message)}`);
+  }
 });
 
 app.listen(PORT, () => {

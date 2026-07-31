@@ -78,3 +78,19 @@ CREATE TABLE IF NOT EXISTS tts_audio_cache (
   content_type TEXT NOT NULL DEFAULT 'audio/mpeg',
   generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- "Today's Summary" -- either AI-generated from that day's trending
+-- headlines, or the site owner's own transcript + voice recording,
+-- managed via /admin/summary?key=... (mirrors the /admin/song pattern)
+-- and shown publicly on the homepage with a Listen button. One row per
+-- calendar date. BYTEA audio for the same ephemeral-filesystem reason as
+-- tts_audio_cache above.
+CREATE TABLE IF NOT EXISTS daily_summary (
+  summary_date DATE PRIMARY KEY,
+  text_content TEXT,
+  text_source TEXT, -- 'ai' | 'user'
+  audio_data BYTEA,
+  audio_content_type TEXT,
+  audio_source TEXT, -- 'ai' | 'user'
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
