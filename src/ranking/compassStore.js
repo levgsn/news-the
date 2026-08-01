@@ -21,7 +21,22 @@ import { fetchGNews } from "./compassSearch.js";
 const REQUEST_SPACING_MS = 2500;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function refreshCompassCells() {
+/**
+ * `minIntervalHours` lets the parent ingest job run frequently (RSS feeds
+ * are unmetered, and a news front page goes stale fast) while this GNews
+ * pass stays roughly daily -- the free tier allows 100 requests/day and
+ * one full pass costs ~48, so running it on every ingest would blow the
+ * quota by mid-morning. Pass 0 to force a refresh.
+ */
+export async function refreshCompassCells({ minIntervalHours = 20 } = {}) {
+  if (minIntervalHours > 0) {
+    const { rows } = await pool.query(`SELECT max(fetched_at) AS last FROM compass_cell_articles`);
+    const last = rows[0]?.last;
+    if (last && Date.now() - new Date(last).getTime() < minIntervalHours * 3600 * 1000) {
+      return { skipped: true, cells: 0, fetched: 0, inserted: 0 };
+    }
+  }
+
   let fetched = 0;
   let inserted = 0;
   let first = true;
@@ -46,7 +61,7 @@ export async function refreshCompassCells() {
     }
   }
 
-  return { cells: GRID_CELLS.length, fetched, inserted };
+  return { skipped: false, cells: GRID_CELLS.length, fetched, inserted };
 }
 
 async function getCellArticles(cellKey, limit) {

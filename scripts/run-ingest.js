@@ -28,7 +28,11 @@ async function main() {
   console.log(`[run-ingest] image backfill: checked ${checked} imageless top clusters, filled ${filled}`);
 
   const compass = await refreshCompassCells();
-  console.log(`[run-ingest] compass grid refresh: ${compass.cells} cells, ${compass.fetched} articles fetched, ${compass.inserted} new`);
+  if (compass.skipped) {
+    console.log(`[run-ingest] compass grid refresh: skipped (refreshed recently; GNews free tier is 100 req/day)`);
+  } else {
+    console.log(`[run-ingest] compass grid refresh: ${compass.cells} cells, ${compass.fetched} articles fetched, ${compass.inserted} new`);
+  }
 
   console.log(`[run-ingest] done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
   await pool.end();
