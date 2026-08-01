@@ -33,9 +33,21 @@ export async function recomputeTrendingScores() {
   return updates.length;
 }
 
+// Stories older than this never surface, no matter how high they score.
+// trending_score is driven by last_seen_at (when we last matched the
+// story), not publish date, so a months-old article that resurfaces in a
+// feed can otherwise outrank today's news -- a Yahoo Finance piece from
+// May once landed in the top 10 this way.
+export const MAX_STORY_AGE_HOURS = 72;
+const FRESH_CLAUSE = `EXISTS (
+  SELECT 1 FROM articles af
+  WHERE af.cluster_id = c.id
+    AND af.published_at > now() - interval '${MAX_STORY_AGE_HOURS} hours'
+)`;
+
 export async function getTrendingClusters({ category = null, limit = 40 } = {}) {
   const params = [];
-  let where = `c.source_count >= 1`;
+  let where = `c.source_count >= 1 AND ${FRESH_CLAUSE}`;
   if (category) {
     params.push(category);
     where += ` AND c.category = $${params.length}`;
@@ -88,7 +100,7 @@ export async function getTrendingClustersPriority({ tiers = [], limit = 10, maxP
     const overfetch = Math.max(remaining * 5, 30);
 
     const params = [];
-    let where = `c.source_count >= 1`;
+    let where = `c.source_count >= 1 AND ${FRESH_CLAUSE}`;
     if (tier.category) {
       params.push(tier.category);
       where += ` AND c.category = $${params.length}`;
@@ -126,6 +138,36 @@ export async function getTrendingClustersPriority({ tiers = [], limit = 10, maxP
       usedIds.add(row.id);
       sourceCounts.set(row.top_source, count + 1);
       takenThisTier++;
+    }
+  }
+
+  // The one-per-outlet cap can leave the grid short when few outlets have
+  // fresh coverage -- a half-empty hero row looks broken, so relax the cap
+  // and fill the remaining slots with the next-best stories regardless of
+  // outlet. Outlet diversity is still preferred; it just isn't absolute.
+  if (selected.length < limit) {
+    const params = usedIds.size > 0 ? [Array.from(usedIds), limit - selected.length] : [limit - selected.length];
+    const excludeClause = usedIds.size > 0 ? `AND c.id != ALL($1::int[])` : "";
+    const { rows } = await pool.query(
+      `SELECT
+         c.id, c.representative_title, c.category, c.trending_score, c.last_seen_at,
+         COUNT(DISTINCT a.source_name) AS source_count,
+         (SELECT a2.url FROM articles a2 WHERE a2.cluster_id = c.id ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_url,
+         (SELECT a2.source_name FROM articles a2 WHERE a2.cluster_id = c.id ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_source,
+         (SELECT a2.published_at FROM articles a2 WHERE a2.cluster_id = c.id ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_published_at,
+         (SELECT a2.image_url FROM articles a2 WHERE a2.cluster_id = c.id AND a2.image_url IS NOT NULL ORDER BY a2.published_at DESC NULLS LAST LIMIT 1) AS top_image
+       FROM clusters c
+       JOIN articles a ON a.cluster_id = c.id
+       WHERE c.source_count >= 1 AND ${FRESH_CLAUSE} ${excludeClause}
+       GROUP BY c.id
+       ORDER BY c.trending_score DESC
+       LIMIT $${params.length}`,
+      params
+    );
+    for (const row of rows) {
+      if (selected.length >= limit) break;
+      selected.push(row);
+      usedIds.add(row.id);
     }
   }
 
