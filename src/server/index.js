@@ -6,7 +6,9 @@ import {
   getTrendingClustersPriority,
 } from "../ranking/trending.js";
 import { getTodaysSong, getUpcomingSongs, setSongForDate, deleteSongForDate } from "../ranking/songSchedule.js";
-import { searchNewsForZone } from "../ranking/compassSearch.js";
+import { searchNewsForCell } from "../ranking/compassSearch.js";
+import { getArticlesForBlend } from "../ranking/compassStore.js";
+import { getSearchTermsForCell } from "../ai/compassQueries.js";
 import { getOrGenerateClusterSummary } from "../ai/summaries.js";
 import { getOrSynthesizeAudio } from "../ai/audioCache.js";
 import {
@@ -18,7 +20,7 @@ import {
 } from "../ai/dailySummary.js";
 import { backfillImagesForClusters } from "../ingestion/backfillImages.js";
 import { CATEGORIES } from "../config/categories.js";
-import { getQuadrant } from "../config/compassZones.js";
+import { getNearestCells, quadrantBlend } from "../config/compassGrid.js";
 
 dotenv.config();
 
@@ -81,6 +83,22 @@ function placeholderColor(name) {
   return `hsl(${hue}, 45%, 87%)`;
 }
 
+// Eastern Time, the newsroom convention -- shown next to every story
+// sitewide so readers can tell at a glance how fresh a story is.
+const WHEN_FORMAT = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+function formatWhen(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${WHEN_FORMAT.format(d)} ET`;
+}
+
 // Shared per-story "Summarize" + read-aloud controls, used by both the hero
 // cards and the category headline lists. Text summary is fetched on
 // button click; the play button only appears once a summary exists, and
@@ -105,9 +123,10 @@ function renderHeadlineList(clusters) {
       const url = escapeHtml(c.top_url || "#");
       const src = escapeHtml(c.top_source || "");
       const count = Number(c.source_count);
+      const when = formatWhen(c.top_published_at);
       return `<div class="headline">
         <a href="${url}" target="_blank" rel="noopener">${title}</a>
-        <span class="meta">(${src}${count > 1 ? ` +${count - 1} more` : ""})</span>
+        <span class="meta">(${src}${count > 1 ? ` +${count - 1} more` : ""}${when ? ` &middot; ${when}` : ""})</span>
         ${renderSummaryControls(c.id)}
       </div>`;
     })
@@ -126,11 +145,12 @@ function renderHeroCards(clusters) {
       const thumb = c.top_image
         ? `<img src="${escapeHtml(c.top_image)}" alt="" loading="lazy" onerror="handleImgError(this)" />`
         : `<div class="thumb-placeholder" style="background:${placeholderColor(src)}"><span>${src}</span></div>`;
+      const when = formatWhen(c.top_published_at);
       return `<div class="hero-card">
         <a class="hero-card-link" href="${url}" target="_blank" rel="noopener">
           <div class="hero-thumb" data-fallback-color="${placeholderColor(src)}" data-fallback-label="${src}">${thumb}</div>
           <div class="hero-title">${title}</div>
-          <div class="hero-meta">${src}</div>
+          <div class="hero-meta">${src}${when ? ` &middot; ${when}` : ""}</div>
         </a>
         ${renderSummaryControls(c.id)}
       </div>`;
@@ -145,31 +165,39 @@ function renderHeroCards(clusters) {
 // article URLs and real thumbnail images, so the featured card shows an
 // actual photo when available (with the same hotlink-failure fallback
 // used on the hero grid).
-function renderCompassResults(items) {
+function renderCompassResults(blend, items) {
+  // The dropped point's "rating" -- e.g. "62% Authoritarian Left / 38%
+  // Libertarian Left" -- always shown, even over an empty result list.
+  const blendHtml = `<div class="compass-blend">${blend
+    .map((b) => `<strong>${b.pct}%</strong> ${escapeHtml(b.label)}`)
+    .join(" &middot; ")}</div>`;
+
   if (items.length === 0) {
-    return `<p class="empty">No live results found right now — try again in a moment.</p>`;
+    return `${blendHtml}<p class="empty">No stories stored for this spot yet — results fill in after the next daily refresh.</p>`;
   }
 
   const [featured, ...rest] = items;
+  const featuredWhen = formatWhen(featured.publishedAt);
   const featuredThumb = featured.image
     ? `<img src="${escapeHtml(featured.image)}" alt="" loading="lazy" onerror="handleImgError(this)" />`
     : `<div class="thumb-placeholder" style="background:${placeholderColor(featured.outlet)}"><span>${escapeHtml(featured.outlet)}</span></div>`;
   const featuredHtml = `<a class="compass-featured" href="${escapeHtml(featured.url)}" target="_blank" rel="noopener">
     <div class="compass-featured-thumb" data-fallback-color="${placeholderColor(featured.outlet)}" data-fallback-label="${escapeHtml(featured.outlet)}">${featuredThumb}</div>
     <div class="compass-featured-title">${escapeHtml(featured.title)}</div>
-    <div class="compass-featured-meta">${escapeHtml(featured.outlet)}</div>
+    <div class="compass-featured-meta">${escapeHtml(featured.outlet)}${featuredWhen ? ` &middot; ${featuredWhen}` : ""}</div>
   </a>`;
 
   const listHtml = rest
-    .map(
-      (item) => `<div class="headline">
+    .map((item) => {
+      const when = formatWhen(item.publishedAt);
+      return `<div class="headline">
         <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.title.toUpperCase())}</a>
-        <span class="meta">(${escapeHtml(item.outlet)})</span>
-      </div>`
-    )
+        <span class="meta">(${escapeHtml(item.outlet)}${when ? ` &middot; ${when}` : ""})</span>
+      </div>`;
+    })
     .join("\n");
 
-  return `${featuredHtml}${listHtml ? `<div class="compass-list">${listHtml}</div>` : ""}`;
+  return `${blendHtml}${featuredHtml}${listHtml ? `<div class="compass-list">${listHtml}</div>` : ""}`;
 }
 
 // Public-facing "Today's Summary" -- either AI-generated or the site
@@ -433,6 +461,14 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
     cursor: crosshair;
   }
   .compass-quadrant { position: absolute; width: 50%; height: 50%; }
+  .compass-grid-lines {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      repeating-linear-gradient(to right, rgba(0, 0, 0, 0.35) 0, rgba(0, 0, 0, 0.35) 1px, transparent 1px, transparent 25%),
+      repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.35) 0, rgba(0, 0, 0, 0.35) 1px, transparent 1px, transparent 25%);
+  }
   .compass-q-al { top: 0; left: 0; background: #f6b8b8; }
   .compass-q-ar { top: 0; right: 0; background: #8fd0f0; }
   .compass-q-ll { bottom: 0; left: 0; background: #bfe3b6; }
@@ -469,6 +505,14 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
     flex: 1;
     min-width: 280px;
     max-width: 480px;
+  }
+  .compass-blend {
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    border-bottom: 2px solid #000;
+    padding-bottom: 4px;
+    margin: 0 0 12px 0;
   }
   .compass-featured { color: inherit; text-decoration: none; display: block; margin-bottom: 16px; }
   .compass-featured-thumb {
@@ -576,6 +620,7 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
         <div class="compass-quadrant compass-q-ar"></div>
         <div class="compass-quadrant compass-q-ll"></div>
         <div class="compass-quadrant compass-q-lr"></div>
+        <div class="compass-grid-lines"></div>
         <div class="compass-axis-label compass-top">Authoritarian</div>
         <div class="compass-axis-label compass-bottom">Libertarian</div>
         <div class="compass-axis-label compass-left">Econ. Left</div>
@@ -765,19 +810,27 @@ app.get("/api/compass", async (req, res) => {
   try {
     const economic = Math.min(1, Math.max(-1, Number(req.query.economic) || 0));
     const authoritarian = Math.min(1, Math.max(-1, Number(req.query.authoritarian) || 0));
-    const quadrant = getQuadrant(economic, authoritarian);
+    // The dropped point gets a quadrant blend score ("62% Authoritarian
+    // Left / 38% Libertarian Left"), and results are mixed from the
+    // clicked cell and its nearest neighbor in that same proportion.
+    // Reads come from compass_cell_articles -- populated by the DAILY
+    // refresh in `npm run ingest` (AI-generated terms per cell, GNews
+    // scan, stored in Postgres) -- so clicks are instant and never spend
+    // GNews quota. Live fetches below are only a bootstrap for a cell
+    // that has no stored stories yet (e.g. before the first refresh ran).
+    const blend = quadrantBlend(economic, authoritarian);
+    const { primary, secondary, rest } = getNearestCells(economic, authoritarian);
 
-    // Every click/drag inside the same quadrant runs this same query, so
-    // results are identical throughout that whole colored area -- by
-    // design, not a bug. Falls back to a broad "politics" search on the
-    // rare chance the quadrant's own query comes back empty, so a click
-    // anywhere always turns up something.
-    let items = await searchNewsForZone(quadrant);
+    let items = await getArticlesForBlend({ primary, secondary, rest, primaryShare: blend[0].pct / 100 });
     if (items.length === 0) {
-      items = await searchNewsForZone({ label: "Politics", query: "politics" });
+      const terms = await getSearchTermsForCell(primary);
+      items = await searchNewsForCell(primary, terms);
+    }
+    if (items.length === 0) {
+      items = await searchNewsForCell({ key: "fallback_politics" }, ["politics"]);
     }
 
-    res.type("html").send(renderCompassResults(items));
+    res.type("html").send(renderCompassResults(blend, items));
   } catch (err) {
     console.error("[api/compass] error:", err);
     res.status(500).send(`<p class="empty">Something broke loading results.</p>`);

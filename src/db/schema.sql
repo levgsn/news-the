@@ -85,6 +85,34 @@ CREATE TABLE IF NOT EXISTS tts_audio_cache (
 -- and shown publicly on the homepage with a Listen button. One row per
 -- calendar date. BYTEA audio for the same ephemeral-filesystem reason as
 -- tts_audio_cache above.
+-- Political-compass 4x4 grid: stored article pool per grid cell, refreshed
+-- once daily by `npm run ingest` (refreshCompassCells) instead of hitting
+-- GNews live on every click -- keeps the free-tier API quota intact and
+-- makes clicks instant. Old rows are deliberately KEPT (no daily wipe):
+-- not every cell gets fresh stories every day, so a cell serves its most
+-- recent stories across past days, newest first.
+CREATE TABLE IF NOT EXISTS compass_cell_articles (
+  id SERIAL PRIMARY KEY,
+  cell_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  url TEXT NOT NULL,
+  outlet TEXT,
+  image_url TEXT,
+  published_at TIMESTAMPTZ,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (cell_key, url)
+);
+CREATE INDEX IF NOT EXISTS idx_compass_cell_articles_cell ON compass_cell_articles(cell_key, published_at DESC);
+
+-- AI-generated search phrases per grid cell (see src/ai/compassQueries.js).
+-- Persisted so a redeploy doesn't re-pay 16 Claude calls -- these are
+-- ideological phrases, not time-sensitive content.
+CREATE TABLE IF NOT EXISTS compass_cell_terms (
+  cell_key TEXT PRIMARY KEY,
+  terms JSONB NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS daily_summary (
   summary_date DATE PRIMARY KEY,
   text_content TEXT,
