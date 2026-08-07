@@ -1,5 +1,7 @@
 import express from "express";
 import multer from "multer";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import {
   getTrendingClusters,
@@ -26,6 +28,10 @@ dotenv.config();
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
+// Static assets (the engraved side-rail artwork). Long cache: the file is
+// content-stable, and it's requested on every page load.
+const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "public");
+app.use(express.static(PUBLIC_DIR, { maxAge: "7d" }));
 // Memory storage (not disk) since the recording gets stored straight into
 // Postgres as BYTEA -- Railway's filesystem is ephemeral anyway. 25MB caps
 // a several-minutes-long voice recording without allowing huge uploads;
@@ -207,12 +213,12 @@ function renderCompassResults(blend, items) {
 // only appears if audio actually exists.
 function renderDailySummarySection(dailySummary) {
   if (!dailySummary?.text_content) {
-    return `<details class="daily-summary-widget">
+    return `<details class="daily-summary-widget reveal">
       <summary>Today's Summary</summary>
       <p class="empty">No summary posted yet today.</p>
     </details>`;
   }
-  return `<details class="daily-summary-widget">
+  return `<details class="daily-summary-widget reveal">
     <summary>Today's Summary</summary>
     <p class="daily-summary-text">${escapeHtml(dailySummary.text_content)}</p>
     ${dailySummary.has_audio ? `<button type="button" class="play-btn daily-summary-play-btn" onclick="playDailySummaryAudio()">&#128266; Listen</button>` : ""}
@@ -222,7 +228,7 @@ function renderDailySummarySection(dailySummary) {
 function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, dailySummary }) {
   const categoriesHtml = categorySections
     .map(
-      ({ label, clusters }) => `<section class="category-section">
+      ({ label, clusters }) => `<section class="category-section reveal">
         <h2>${escapeHtml(label)}</h2>
         ${renderHeadlineList(clusters)}
       </section>`
@@ -247,8 +253,58 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
     --link: #000;
     --visited: #000;
     --meta: #666;
-    --font: 'Roboto Condensed', Arial, Helvetica, sans-serif;
+    /* Body copy is Times New Roman sitewide; --font-header is kept for the
+       masthead only (brand wordmark + glitch logo), which stays condensed. */
+    --font: 'Times New Roman', Times, serif;
+    --font-header: 'Roboto Condensed', Arial, Helvetica, sans-serif;
   }
+
+  /* ---------- Scroll reveal ---------- */
+  /* Everything fades in on load; sections drop down into place as they
+     scroll into view and then STAY put -- the observer unobserves on
+     first reveal, so nothing re-hides when scrolling back up. */
+  body { opacity: 0; transition: opacity 0.6s ease; }
+  body.loaded { opacity: 1; }
+  .reveal {
+    opacity: 0;
+    transform: translateY(-28px);
+    transition: opacity 0.7s ease, transform 0.7s ease;
+  }
+  .reveal.shown { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    body, .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+  }
+
+  /* ---------- Engraved side rails ---------- */
+  .side-rail {
+    position: absolute;
+    top: 0;
+    width: 150px;
+    display: flex;
+    flex-direction: column;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .side-rail-left { left: 0; }
+  .side-rail-right { right: 0; }
+  /* Panels reveal like everything else, but settle at a low opacity so the
+     artwork reads as a watermark behind the news rather than competing
+     with it -- hence their own .shown rule instead of the generic one. */
+  .side-rail-panel {
+    width: 100%;
+    aspect-ratio: 320 / 569;
+    background-image: url('/side-art.png');
+    background-size: contain;
+    background-repeat: no-repeat;
+    opacity: 0;
+    transform: translateY(-28px);
+    transition: opacity 0.7s ease, transform 0.7s ease;
+  }
+  .side-rail-panel.shown { opacity: 0.16; transform: none; }
+  .side-rail-right .side-rail-panel { transform: translateY(-28px) scaleX(-1); }
+  .side-rail-right .side-rail-panel.shown { transform: scaleX(-1); }
+  /* Below ~1500px the rails would crowd the 1200px content column. */
+  @media (max-width: 1500px) { .side-rail { display: none; } }
   * { box-sizing: border-box; }
   body {
     background: var(--paper);
@@ -272,7 +328,9 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
     padding-bottom: 12px;
     margin-bottom: 20px;
   }
+  /* The masthead is the one place that keeps the condensed sans face. */
   .brand h1 {
+    font-family: var(--font-header);
     font-size: 30px;
     font-weight: 900;
     letter-spacing: 0.5px;
@@ -303,7 +361,7 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
   /* Glitch / chromatic-aberration logo, sized to fill the header's right side */
   .glitch {
     position: relative;
-    font-family: var(--font);
+    font-family: var(--font-header);
     font-weight: 900;
     font-size: clamp(22px, 4vw, 38px);
     line-height: 1.2;
@@ -359,6 +417,8 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
     margin: 0 0 10px 0;
     text-align: center;
   }
+  /* "Curate" stands alone above the circle -- no rule underneath it. */
+  .compass-widget h2 { border-bottom: none; padding-bottom: 0; }
 
   /* ---------- Today's Summary ---------- */
   .daily-summary-widget {
@@ -450,12 +510,18 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
     justify-content: center;
     align-items: flex-start;
   }
+  /* Borderless circle. The underlying coordinate space is still a square
+     -- border-radius plus overflow:hidden clips the quadrants and grid
+     lines into a disc, and the JS ignores clicks outside the radius so
+     the corners aren't silently clickable. */
   .compass-square {
     position: relative;
     width: 520px;
     height: 520px;
     max-width: 100%;
-    border: 2px solid #000;
+    border: none;
+    border-radius: 50%;
+    overflow: hidden;
     flex-shrink: 0;
     touch-action: none;
     cursor: crosshair;
@@ -483,10 +549,10 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
     pointer-events: none;
     text-shadow: 0 0 4px rgba(255, 255, 255, 0.85);
   }
-  .compass-top { top: 10px; left: 50%; transform: translateX(-50%); }
-  .compass-bottom { bottom: 10px; left: 50%; transform: translateX(-50%); }
-  .compass-left { top: 50%; left: 10px; transform: translateY(-50%); }
-  .compass-right { top: 50%; right: 10px; transform: translateY(-50%); }
+  .compass-top { top: 18px; left: 50%; transform: translateX(-50%); }
+  .compass-bottom { bottom: 18px; left: 50%; transform: translateX(-50%); }
+  .compass-left { top: 50%; left: 18px; transform: translateY(-50%); }
+  .compass-right { top: 50%; right: 18px; transform: translateY(-50%); }
   .compass-marker {
     position: absolute;
     top: 50%;
@@ -576,6 +642,9 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
 </style>
 </head>
 <body>
+  <div class="side-rail side-rail-left" id="sideRailLeft" aria-hidden="true"></div>
+  <div class="side-rail side-rail-right" id="sideRailRight" aria-hidden="true"></div>
+
   <header class="site-header">
     <div class="brand">
       <h1>DirectioNews</h1>
@@ -604,15 +673,15 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
 
   ${renderDailySummarySection(dailySummary)}
 
-  <section class="hero-trending">
+  <section class="hero-trending reveal">
     <h2>U.S. Politics &middot; World / Geopolitics &middot; Crime &amp; Legal</h2>
     <div class="hero-grid">
       ${renderHeroCards(heroClusters)}
     </div>
   </section>
 
-  <section class="compass-widget">
-    <h2>Curate By Political Lean</h2>
+  <section class="compass-widget reveal">
+    <h2>Curate</h2>
     <p class="compass-hint">Click or drag anywhere on the chart below — we'll search the web live for news matching that spot.</p>
     <div class="compass-layout">
       <div class="compass-square" id="compassSquare">
@@ -633,13 +702,13 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
     </div>
   </section>
 
-  <div class="main-layout">
+  <div class="main-layout reveal">
     <main class="categories">
       ${categoriesHtml}
     </main>
   </div>
 
-  <section class="big-trending">
+  <section class="big-trending reveal">
     <h2>Trending Now</h2>
     ${renderHeadlineList(bigTrending)}
   </section>
@@ -650,6 +719,57 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
     // og:image scrape found it fine), but the browser's own <img> request
     // gets refused. Swap to the same colored placeholder used when there
     // was never a URL at all, rather than showing a broken-image icon.
+    // Fade the page in, build the side rails to match the document's real
+    // height, then reveal every .reveal element as it scrolls into view.
+    // unobserve() on first reveal is what makes elements STAY once seen.
+    (function () {
+      function buildRails() {
+        var docHeight = document.body.scrollHeight;
+        var railWidth = 150;
+        var panelHeight = railWidth * (569 / 320);
+        var count = Math.ceil(docHeight / panelHeight);
+        ["sideRailLeft", "sideRailRight"].forEach(function (id) {
+          var rail = document.getElementById(id);
+          if (!rail) return;
+          rail.style.height = docHeight + "px";
+          rail.innerHTML = "";
+          for (var i = 0; i < count; i++) {
+            var panel = document.createElement("div");
+            panel.className = "side-rail-panel";
+            rail.appendChild(panel);
+          }
+        });
+      }
+
+      function observeAll() {
+        var targets = document.querySelectorAll(".reveal, .side-rail-panel");
+        if (!("IntersectionObserver" in window)) {
+          targets.forEach(function (el) { el.classList.add("shown"); });
+          return;
+        }
+        var io = new IntersectionObserver(function (entries) {
+          entries.forEach(function (entry) {
+            if (!entry.isIntersecting) return;
+            entry.target.classList.add("shown");
+            io.unobserve(entry.target);
+          });
+        }, { threshold: 0.08, rootMargin: "0px 0px -40px 0px" });
+        targets.forEach(function (el) { io.observe(el); });
+      }
+
+      window.addEventListener("load", function () {
+        document.body.classList.add("loaded");
+        buildRails();
+        observeAll();
+      });
+
+      var resizeTimer;
+      window.addEventListener("resize", function () {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () { buildRails(); observeAll(); }, 200);
+      });
+    })();
+
     function handleImgError(img) {
       const thumb = img.parentElement;
       const div = document.createElement("div");
@@ -717,12 +837,25 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
       if (!square) return;
       let dragging = false;
 
+      // The compass renders as a circle, so a point is clamped to the
+      // DISC rather than the square: anything dragged past the rim snaps
+      // back onto the edge instead of landing in an invisible corner.
       function setMarker(clientX, clientY) {
         const rect = square.getBoundingClientRect();
         let x = (clientX - rect.left) / rect.width;
         let y = (clientY - rect.top) / rect.height;
-        x = Math.min(1, Math.max(0, x));
-        y = Math.min(1, Math.max(0, y));
+
+        let dx = x - 0.5;
+        let dy = y - 0.5;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 0.5) {
+          const scale = 0.5 / dist;
+          dx *= scale;
+          dy *= scale;
+          x = 0.5 + dx;
+          y = 0.5 + dy;
+        }
+
         marker.style.left = (x * 100) + "%";
         marker.style.top = (y * 100) + "%";
         const economic = x * 2 - 1;
