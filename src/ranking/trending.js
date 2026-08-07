@@ -204,34 +204,6 @@ export async function getSourceIndex({ perSourceLimit = 5 } = {}) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/**
- * Returns state news grouped by state (A-Z by full state name), for the
- * sidebar's state dropdown. Mirrors getSourceIndex's single-windowed-query
- * approach. Categories for state feeds are "state:<ABBR>" (see
- * STATE_SOURCES in config/sources.js) — stateNames maps abbr -> full name
- * for display and alphabetical sorting.
- */
-export async function getStateIndex(stateNames, { perStateLimit = 5 } = {}) {
-  const { rows } = await pool.query(
-    `SELECT category, title, url, published_at FROM (
-       SELECT
-         category, title, url, published_at,
-         ROW_NUMBER() OVER (PARTITION BY category ORDER BY published_at DESC NULLS LAST) AS rn
-       FROM articles
-       WHERE category LIKE 'state:%'
-     ) ranked
-     WHERE rn <= $1`,
-    [perStateLimit]
-  );
-
-  const byState = new Map();
-  for (const row of rows) {
-    const abbr = row.category.replace("state:", "");
-    if (!byState.has(abbr)) byState.set(abbr, []);
-    byState.get(abbr).push({ title: row.title, url: row.url });
-  }
-
-  return Array.from(byState.entries())
-    .map(([abbr, articles]) => ({ abbr, name: stateNames.get(abbr) || abbr, articles }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
+// getStateIndex() lived here to power the removed sidebar's state dropdown.
+// It went away with the per-state feeds themselves -- see the note in
+// src/config/sources.js for why those were dropped.

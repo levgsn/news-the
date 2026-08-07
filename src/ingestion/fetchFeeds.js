@@ -1,6 +1,6 @@
 import Parser from "rss-parser";
 import { pool } from "../db/client.js";
-import { SOURCES, STATE_SOURCES } from "../config/sources.js";
+import { SOURCES } from "../config/sources.js";
 
 const parser = new Parser({
   timeout: 15000,
@@ -87,13 +87,13 @@ async function fetchOneSource(source) {
 }
 
 /**
- * Runs ingestion across all configured sources (national + all state feeds).
- * Sequential with a small concurrency window rather than fully parallel, so
- * we don't hammer 70+ feeds at once from a single Railway worker.
+ * Runs ingestion across every configured source. Sequential with a small
+ * concurrency window rather than fully parallel, so we don't hammer every
+ * feed at once from a single Railway worker.
  */
-export async function fetchAllFeeds({ concurrency = 6, includeStates = true } = {}) {
+export async function fetchAllFeeds({ concurrency = 6 } = {}) {
   const results = [];
-  const queue = [...SOURCES, ...(includeStates ? STATE_SOURCES : [])];
+  const queue = [...SOURCES];
 
   async function worker() {
     while (queue.length > 0) {

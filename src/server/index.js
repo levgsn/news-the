@@ -510,18 +510,12 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
     justify-content: center;
     align-items: flex-start;
   }
-  /* Borderless circle. The underlying coordinate space is still a square
-     -- border-radius plus overflow:hidden clips the quadrants and grid
-     lines into a disc, and the JS ignores clicks outside the radius so
-     the corners aren't silently clickable. */
   .compass-square {
     position: relative;
     width: 520px;
     height: 520px;
     max-width: 100%;
-    border: none;
-    border-radius: 50%;
-    overflow: hidden;
+    border: 2px solid #000;
     flex-shrink: 0;
     touch-action: none;
     cursor: crosshair;
@@ -837,25 +831,12 @@ function renderPage({ heroClusters, categorySections, bigTrending, todaysSong, d
       if (!square) return;
       let dragging = false;
 
-      // The compass renders as a circle, so a point is clamped to the
-      // DISC rather than the square: anything dragged past the rim snaps
-      // back onto the edge instead of landing in an invisible corner.
       function setMarker(clientX, clientY) {
         const rect = square.getBoundingClientRect();
         let x = (clientX - rect.left) / rect.width;
         let y = (clientY - rect.top) / rect.height;
-
-        let dx = x - 0.5;
-        let dy = y - 0.5;
-        const dist = Math.hypot(dx, dy);
-        if (dist > 0.5) {
-          const scale = 0.5 / dist;
-          dx *= scale;
-          dy *= scale;
-          x = 0.5 + dx;
-          y = 0.5 + dy;
-        }
-
+        x = Math.min(1, Math.max(0, x));
+        y = Math.min(1, Math.max(0, y));
         marker.style.left = (x * 100) + "%";
         marker.style.top = (y * 100) + "%";
         const economic = x * 2 - 1;
