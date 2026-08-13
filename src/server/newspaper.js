@@ -47,12 +47,17 @@ export function editionDate() {
   return EDITION_FORMAT.format(new Date());
 }
 
-function thumb(imageUrl, label, cls) {
+// `isStock` marks images that came from the keyword fallback rather than
+// the publisher. Those get a small corner label: a generic photo matching
+// a headline keyword would otherwise read as documentary evidence of the
+// event itself, which it isn't.
+function thumb(imageUrl, label, cls, isStock = false) {
   const color = placeholderColor(label || "");
   const inner = imageUrl
     ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" onerror="handleImgError(this)" />`
     : `<div class="thumb-placeholder" style="background:${color}"><span>${escapeHtml(label || "")}</span></div>`;
-  return `<div class="${cls}" data-fallback-color="${color}" data-fallback-label="${escapeHtml(label || "")}">${inner}</div>`;
+  const tag = imageUrl && isStock ? `<span class="stock-tag">stock</span>` : "";
+  return `<div class="${cls}" data-fallback-color="${color}" data-fallback-label="${escapeHtml(label || "")}">${inner}${tag}</div>`;
 }
 
 // Per-story AI controls. Nothing fires until the reader clicks: the text
@@ -112,9 +117,11 @@ function renderFrontPage(breaking, trending, dailySummary) {
 
   const breakingHtml = breaking
     ? `<div class="breaking">
-        <div class="breaking-flag">Breaking</div>
+        <div class="breaking-banner">
+          <span class="breaking-banner-text">Breaking News</span>
+        </div>
         <a class="breaking-link" href="${escapeHtml(breaking.top_url || "#")}" target="_blank" rel="noopener">
-          ${thumb(breaking.top_image, breaking.top_source, "breaking-thumb")}
+          ${thumb(breaking.top_image, breaking.top_source, "breaking-thumb", breaking.top_image_is_stock)}
           <h2 class="breaking-title">${escapeHtml(breaking.representative_title || "")}</h2>
         </a>
         <div class="breaking-meta">${escapeHtml(breaking.top_source || "")}${formatWhen(breaking.top_published_at) ? ` &middot; ${formatWhen(breaking.top_published_at)}` : ""}</div>
@@ -127,7 +134,7 @@ function renderFrontPage(breaking, trending, dailySummary) {
         .map(
           (c) => `<div class="tr-card">
             <a class="tr-link" href="${escapeHtml(c.top_url || "#")}" target="_blank" rel="noopener">
-              ${thumb(c.top_image, c.top_source, "tr-thumb")}
+              ${thumb(c.top_image, c.top_source, "tr-thumb", c.top_image_is_stock)}
               <div class="tr-title">${escapeHtml(c.representative_title || "")}</div>
               <div class="tr-meta">${escapeHtml(c.top_source || "")}${formatWhen(c.top_published_at) ? ` &middot; ${formatWhen(c.top_published_at)}` : ""}</div>
             </a>
@@ -223,7 +230,7 @@ function renderFunPage(funClusters) {
         .map(
           (c) => `<div class="tr-card">
             <a class="tr-link" href="${escapeHtml(c.top_url || "#")}" target="_blank" rel="noopener">
-              ${thumb(c.top_image, c.top_source, "tr-thumb")}
+              ${thumb(c.top_image, c.top_source, "tr-thumb", c.top_image_is_stock)}
               <div class="tr-title">${escapeHtml(c.representative_title || "")}</div>
               <div class="tr-meta">${escapeHtml(c.top_source || "")}${formatWhen(c.top_published_at) ? ` &middot; ${formatWhen(c.top_published_at)}` : ""}</div>
             </a>
@@ -454,12 +461,17 @@ export function renderNewspaper({
   @media (max-width: 1450px) { .side-rail { display: none; } }
 
   /* ---------- Paper / pages ---------- */
+  /* The paper is a 3D stage so pages can rotate about their spine rather
+     than just cross-fading -- that hinge is what sells "turning a page"
+     instead of "swapping a slide". */
   .paper {
     position: relative;
     max-width: 1080px;
     margin: 0 auto;
     padding: 0;
     z-index: 1;
+    perspective: 2400px;
+    perspective-origin: 50% 40%;
   }
   .page {
     display: none;
@@ -467,14 +479,73 @@ export function renderNewspaper({
     min-height: 100vh;
     padding: 28px 40px 90px;
     box-shadow: 0 0 24px rgba(0,0,0,0.12);
-    animation: pageIn 0.5s ease;
+    transform-style: preserve-3d;
+    backface-visibility: hidden;
   }
   .page.active { display: block; }
-  @keyframes pageIn {
-    from { opacity: 0; transform: translateX(26px); }
-    to { opacity: 1; transform: none; }
-  }
   @media (max-width: 700px) { .page { padding: 20px 16px 90px; } }
+
+  /* Forward: the outgoing page swings away on its left edge (spine) while
+     the incoming one settles in. Backward mirrors it. */
+  .page.flip-out-fwd { display: block; transform-origin: left center; animation: flipOutFwd .62s ease-in forwards; z-index: 3; position: relative; }
+  .page.flip-in-fwd { animation: flipInFwd .62s ease-out both; }
+  .page.flip-out-back { display: block; transform-origin: right center; animation: flipOutBack .62s ease-in forwards; z-index: 3; position: relative; }
+  .page.flip-in-back { animation: flipInBack .62s ease-out both; }
+
+  @keyframes flipOutFwd {
+    0% { transform: rotateY(0deg); opacity: 1; box-shadow: 0 0 24px rgba(0,0,0,0.12); }
+    100% { transform: rotateY(-88deg); opacity: 0; box-shadow: 28px 0 46px rgba(0,0,0,0.34); }
+  }
+  @keyframes flipInFwd {
+    0% { transform: rotateY(70deg); transform-origin: left center; opacity: .2; }
+    100% { transform: rotateY(0deg); transform-origin: left center; opacity: 1; }
+  }
+  @keyframes flipOutBack {
+    0% { transform: rotateY(0deg); opacity: 1; box-shadow: 0 0 24px rgba(0,0,0,0.12); }
+    100% { transform: rotateY(88deg); opacity: 0; box-shadow: -28px 0 46px rgba(0,0,0,0.34); }
+  }
+  @keyframes flipInBack {
+    0% { transform: rotateY(-70deg); transform-origin: right center; opacity: .2; }
+    100% { transform: rotateY(0deg); transform-origin: right center; opacity: 1; }
+  }
+
+  /* Corner curl: a triangle of "paper" peeling at the outer corner during
+     the turn, shaded so it reads as a lifted sheet rather than a shape. */
+  .page-corner {
+    position: fixed;
+    width: 190px; height: 190px;
+    pointer-events: none;
+    z-index: 6;
+    opacity: 0;
+  }
+  .page-corner.curl-fwd {
+    right: 0; bottom: 0;
+    background: linear-gradient(225deg, var(--paper) 0%, #ded8c6 46%, #b9b2a0 62%, rgba(0,0,0,0.18) 76%, transparent 77%);
+    box-shadow: -8px -8px 22px rgba(0,0,0,0.22);
+    animation: curlFwd .62s ease-in-out;
+  }
+  .page-corner.curl-back {
+    left: 0; bottom: 0;
+    background: linear-gradient(135deg, var(--paper) 0%, #ded8c6 46%, #b9b2a0 62%, rgba(0,0,0,0.18) 76%, transparent 77%);
+    box-shadow: 8px -8px 22px rgba(0,0,0,0.22);
+    animation: curlBack .62s ease-in-out;
+  }
+  @keyframes curlFwd {
+    0% { opacity: 0; transform: translate(78px, 78px) rotate(0deg); }
+    38% { opacity: 1; transform: translate(0, 0) rotate(-9deg); }
+    100% { opacity: 0; transform: translate(-190px, -34px) rotate(-30deg); }
+  }
+  @keyframes curlBack {
+    0% { opacity: 0; transform: translate(-78px, 78px) rotate(0deg); }
+    38% { opacity: 1; transform: translate(0, 0) rotate(9deg); }
+    100% { opacity: 0; transform: translate(190px, -34px) rotate(30deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .page.flip-out-fwd, .page.flip-in-fwd, .page.flip-out-back, .page.flip-in-back { animation: none; }
+    .page.flip-out-fwd, .page.flip-out-back { display: none; }
+    .page-corner { display: none; }
+  }
 
   /* ---------- Cover ---------- */
   .page-cover { display: none; text-align: center; }
@@ -524,12 +595,49 @@ export function renderNewspaper({
   }
 
   /* ---------- Breaking ---------- */
-  .breaking { border: 2px solid var(--ink); padding: 18px; margin-bottom: 10px; background: #fffdf7; }
-  .breaking-flag {
-    display: inline-block; background: var(--ink); color: var(--paper);
-    font-family: var(--font-header); font-weight: 700; letter-spacing: 3px;
-    text-transform: uppercase; font-size: 12px; padding: 4px 12px; margin-bottom: 12px;
+  .breaking { border: 3px solid var(--ink); padding: 0 0 18px; margin-bottom: 18px; background: #fffdf7; }
+  .breaking-banner {
+    background: #c1121f;
+    color: #fff;
+    text-align: center;
+    padding: 10px 12px;
+    margin-bottom: 16px;
+    overflow: hidden;
+    position: relative;
   }
+  /* Slow sheen sweeping across the banner -- draws the eye without the
+     jitter of a flash or blink, which gets annoying fast on a page you
+     sit with. */
+  .breaking-banner::after {
+    content: "";
+    position: absolute; top: 0; bottom: 0; left: -60%;
+    width: 45%;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,0.38), transparent);
+    animation: sheen 4.5s ease-in-out infinite;
+  }
+  @keyframes sheen { 0% { left: -60%; } 55%, 100% { left: 130%; } }
+  .breaking-banner-text {
+    font-family: var(--font-header);
+    font-weight: 900;
+    font-size: clamp(30px, 6.5vw, 62px);
+    letter-spacing: clamp(3px, 1.2vw, 12px);
+    text-transform: uppercase;
+    line-height: 1.05;
+    display: inline-block;
+    text-shadow: 2px 2px 0 rgba(0,0,0,0.35);
+    animation: boom 0.75s cubic-bezier(.2,1.5,.4,1) both;
+  }
+  @keyframes boom {
+    0% { transform: scale(.55); opacity: 0; }
+    70% { transform: scale(1.06); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .breaking-banner::after { animation: none; }
+    .breaking-banner-text { animation: none; }
+  }
+  .breaking-link, .breaking-meta, .breaking .summary-controls { padding: 0 18px; }
+  .breaking-link { display: block; }
   .breaking-link { text-decoration: none; color: inherit; display: block; }
   .breaking-thumb { width: 100%; max-height: 320px; aspect-ratio: 16/7; overflow: hidden; border: 1px solid #ccc; margin-bottom: 12px; }
   .breaking-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -548,6 +656,15 @@ export function renderNewspaper({
   .thumb-placeholder {
     width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
     font-size: 11px; font-weight: 700; text-align: center; padding: 6px; color: #444;
+  }
+  /* Marks a keyword-matched CC image so it isn't mistaken for a photo of
+     the actual event. */
+  .tr-thumb, .breaking-thumb { position: relative; }
+  .stock-tag {
+    position: absolute; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.62); color: #fff;
+    font-family: var(--font-header); font-size: 9px; letter-spacing: 1px;
+    text-transform: uppercase; padding: 1px 5px;
   }
 
   /* ---------- Headlines ---------- */
@@ -673,12 +790,14 @@ export function renderNewspaper({
     var PAGE_NAMES = ${JSON.stringify(["Cover", "Front", "X", "Fun", "Sports", "Slider"].concat(catPages.map((_, i) => "More " + (i + 1))))};
     var currentPage = 0;
 
-    function goToPage(n) {
-      if (n < 0 || n >= TOTAL_PAGES) return;
+    var FLIP_MS = 620;
+    var flipping = false;
+    var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    function pageEl(n) { return document.querySelector('.page[data-page="' + n + '"]'); }
+
+    function finishNav(n) {
       currentPage = n;
-      document.querySelectorAll(".page").forEach(function (p) {
-        p.classList.toggle("active", Number(p.dataset.page) === n);
-      });
       document.getElementById("prevBtn").disabled = n === 0;
       document.getElementById("nextBtn").disabled = n === TOTAL_PAGES - 1;
       document.querySelectorAll(".nav-page").forEach(function (b) {
@@ -687,6 +806,47 @@ export function renderNewspaper({
       window.scrollTo(0, 0);
       if (history.replaceState) history.replaceState(null, "", "#page-" + n);
       revealVisible();
+    }
+
+    // Animates the turn: the outgoing sheet swings on its spine, the
+    // incoming one settles in behind it, and a shaded corner peels across
+    // in the same direction. The flipping guard stops rapid clicks or a
+    // held arrow key overlapping two turns and stranding a page mid-rotation.
+    function goToPage(n, opts) {
+      opts = opts || {};
+      if (n < 0 || n >= TOTAL_PAGES) return;
+      if (flipping) return;
+
+      var from = pageEl(currentPage);
+      var to = pageEl(n);
+      if (!to) return;
+
+      if (reduceMotion || opts.instant || n === currentPage || !from) {
+        document.querySelectorAll(".page").forEach(function (p) {
+          p.classList.remove("active", "flip-out-fwd", "flip-in-fwd", "flip-out-back", "flip-in-back");
+        });
+        to.classList.add("active");
+        finishNav(n);
+        return;
+      }
+
+      var forward = n > currentPage;
+      flipping = true;
+
+      var corner = document.createElement("div");
+      corner.className = "page-corner " + (forward ? "curl-fwd" : "curl-back");
+      document.body.appendChild(corner);
+
+      from.classList.add(forward ? "flip-out-fwd" : "flip-out-back");
+      to.classList.add("active", forward ? "flip-in-fwd" : "flip-in-back");
+      finishNav(n);
+
+      setTimeout(function () {
+        from.classList.remove("active", "flip-out-fwd", "flip-out-back");
+        to.classList.remove("flip-in-fwd", "flip-in-back");
+        if (corner.parentNode) corner.parentNode.removeChild(corner);
+        flipping = false;
+      }, FLIP_MS);
     }
     function nextPage() { goToPage(currentPage + 1); }
     function prevPage() { goToPage(currentPage - 1); }
@@ -835,7 +995,7 @@ export function renderNewspaper({
       buildNav();
       setLean(3);
       var hash = /^#page-(\\d+)$/.exec(window.location.hash);
-      goToPage(hash ? Math.min(Number(hash[1]), TOTAL_PAGES - 1) : 0);
+      goToPage(hash ? Math.min(Number(hash[1]), TOTAL_PAGES - 1) : 0, { instant: true });
     });
     var rt;
     window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(buildRails, 200); });

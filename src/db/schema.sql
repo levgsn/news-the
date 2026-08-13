@@ -114,6 +114,24 @@ CREATE TABLE IF NOT EXISTS outlet_lean_cache (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Keyword -> stock image lookups (Openverse, CC-licensed). Cached so the
+-- same keyword is only searched once ever. Used as the last-resort
+-- thumbnail when an article has no real artwork of its own; see
+-- src/ingestion/keywordImage.js.
+CREATE TABLE IF NOT EXISTS keyword_images (
+  keyword TEXT PRIMARY KEY,
+  image_url TEXT,
+  source_url TEXT,
+  license TEXT,
+  creator TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Marks which article images came from that keyword fallback rather than
+-- the publisher, so the UI can label them as illustrative stock art
+-- instead of implying they're photos of the actual event.
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS image_is_stock BOOLEAN NOT NULL DEFAULT false;
+
 -- "Today's Summary" -- either AI-generated from that day's trending
 -- headlines, or the site owner's own transcript + voice recording,
 -- managed via /admin/summary?key=... (mirrors the /admin/song pattern)

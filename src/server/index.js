@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import { getTrendingClusters, getTrendingClustersPriority } from "../ranking/trending.js";
 import { getTodaysSong, getUpcomingSongs, setSongForDate, deleteSongForDate } from "../ranking/songSchedule.js";
 import { getSliderData } from "../ranking/politicalSlider.js";
+import { getLightheartedClusters } from "../ranking/lighthearted.js";
 import { getOrGenerateClusterSummary } from "../ai/summaries.js";
 import { getOrSynthesizeAudio } from "../ai/audioCache.js";
 import { generateText } from "../ai/claude.js";
@@ -17,6 +18,7 @@ import {
   setUserDailySummary,
 } from "../ai/dailySummary.js";
 import { backfillImagesForClusters } from "../ingestion/backfillImages.js";
+import { backfillKeywordImages } from "../ingestion/keywordImage.js";
 import { getSportsBundle } from "../ingestion/sports.js";
 import { getXBundle } from "../ingestion/xTrends.js";
 import { CATEGORIES } from "../config/categories.js";
@@ -92,7 +94,7 @@ app.get("/", async (req, res) => {
         getTrendingClustersPriority({ tiers: HERO_TIERS, limit: 11 }),
         getTodaysSong(),
         getTodaysSummary(),
-        getTrendingClusters({ category: "fun_odd", limit: 10 }),
+        getLightheartedClusters({ limit: 10 }),
         getTrendingClusters({ category: "sports", limit: 10 }),
         getSportsBundle(),
         getXBundle(),
@@ -104,10 +106,13 @@ app.get("/", async (req, res) => {
     const breaking = breakingAndTrending[0] || null;
     const trending = breakingAndTrending.slice(1, 11);
 
-    // Guarantee real artwork on the stories shown largest, rather than
-    // depending on whenever the last ingest ran. Persisted, so each story
-    // pays this at most once.
-    await backfillImagesForClusters([breaking, ...trending, ...funClusters].filter(Boolean));
+    // Every story that renders a thumbnail box gets something in it. First
+    // pass scrapes the publisher's own og:image; whatever is still empty
+    // falls back to a CC-licensed keyword image, flagged as stock so the
+    // UI can label it. Both persist, so a story pays this at most once.
+    const withThumbs = [breaking, ...trending, ...funClusters].filter(Boolean);
+    await backfillImagesForClusters(withThumbs);
+    await backfillKeywordImages(withThumbs);
 
     // Fun/Odd and Sports get dedicated pages, so drop them from the
     // "More Trending" spread to avoid printing the same story twice.
