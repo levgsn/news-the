@@ -61,6 +61,10 @@ export const SOURCES = [
   // --- Social Media / Internet Culture ---
   { name: "Mashable", url: "https://mashable.com/feeds/rss/all", category: "social_media_internet_culture", weight: 0.9 },
   { name: "Internet Culture (Google)", url: googleNewsFeed("TikTok OR viral OR internet culture OR social media trend"), category: "social_media_internet_culture", weight: 0.8 },
+
+  // --- Fun / Odd News (the newspaper's lighthearted page) ---
+  { name: "UPI Odd News", url: "https://rss.upi.com/news/odd_news.rss", category: "fun_odd", weight: 1.0 },
+  { name: "Odd News (Google)", url: googleNewsFeed("offbeat OR quirky OR bizarre OR heartwarming story"), category: "fun_odd", weight: 0.8 },
 ];
 
 // NOTE: per-state Google News feeds ("Wyoming News", "Wisconsin News", etc.)

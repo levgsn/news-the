@@ -11,4 +11,5 @@ export const CATEGORIES = [
   { slug: "climate_natural_disasters", label: "Climate / Natural Disasters" },
   { slug: "international_politics", label: "International Politics" },
   { slug: "social_media_internet_culture", label: "Social Media / Internet Culture" },
+  { slug: "fun_odd", label: "Fun / Odd News" },
 ];

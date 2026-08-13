@@ -2,7 +2,7 @@ import { fetchAllFeeds } from "../src/ingestion/fetchFeeds.js";
 import { clusterPendingArticles } from "../src/processing/cluster.js";
 import { recomputeTrendingScores } from "../src/ranking/trending.js";
 import { backfillMissingImages } from "../src/ingestion/backfillImages.js";
-import { refreshCompassCells } from "../src/ranking/compassStore.js";
+import { refreshSliderEvent } from "../src/ranking/politicalSlider.js";
 import { pool } from "../src/db/client.js";
 
 async function main() {
@@ -27,11 +27,11 @@ async function main() {
   const { checked, filled } = await backfillMissingImages();
   console.log(`[run-ingest] image backfill: checked ${checked} imageless top clusters, filled ${filled}`);
 
-  const compass = await refreshCompassCells();
-  if (compass.skipped) {
-    console.log(`[run-ingest] compass grid refresh: skipped (refreshed recently; GNews free tier is 100 req/day)`);
+  const slider = await refreshSliderEvent();
+  if (slider.skipped) {
+    console.log(`[run-ingest] political slider: skipped (${slider.reason || "already generated today"})`);
   } else {
-    console.log(`[run-ingest] compass grid refresh: ${compass.cells} cells, ${compass.fetched} articles fetched, ${compass.inserted} new`);
+    console.log(`[run-ingest] political slider: "${slider.headline.slice(0, 60)}..." -> ${slider.articles} articles across leans`);
   }
 
   console.log(`[run-ingest] done in ${((Date.now() - start) / 1000).toFixed(1)}s`);

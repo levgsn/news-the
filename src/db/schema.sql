@@ -79,40 +79,46 @@ CREATE TABLE IF NOT EXISTS tts_audio_cache (
   generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- "Today's Summary" -- either AI-generated from that day's trending
--- headlines, or the site owner's own transcript + voice recording,
--- managed via /admin/summary?key=... (mirrors the /admin/song pattern)
--- and shown publicly on the homepage with a Listen button. One row per
--- calendar date. BYTEA audio for the same ephemeral-filesystem reason as
--- tts_audio_cache above.
--- Political-compass 4x4 grid: stored article pool per grid cell, refreshed
--- once daily by `npm run ingest` (refreshCompassCells) instead of hitting
--- GNews live on every click -- keeps the free-tier API quota intact and
--- makes clicks instant. Old rows are deliberately KEPT (no daily wipe):
--- not every cell gets fresh stories every day, so a cell serves its most
--- recent stories across past days, newest first.
-CREATE TABLE IF NOT EXISTS compass_cell_articles (
+-- The Political Slider (replaced the old 4x4 compass grid): one featured
+-- event per day, with coverage of that SAME event bucketed by outlet lean
+-- on a 1-5 scale (1 far left, 2 moderate left, 3 center, 4 moderate
+-- right, 5 far right). Populated once daily by `npm run ingest`
+-- (refreshSliderEvent in src/ranking/politicalSlider.js).
+CREATE TABLE IF NOT EXISTS slider_events (
   id SERIAL PRIMARY KEY,
-  cell_key TEXT NOT NULL,
+  event_date DATE NOT NULL UNIQUE,
+  headline TEXT NOT NULL,
+  query TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS slider_articles (
+  id SERIAL PRIMARY KEY,
+  event_id INT NOT NULL REFERENCES slider_events(id) ON DELETE CASCADE,
+  lean INT NOT NULL, -- 1..5
   title TEXT NOT NULL,
   url TEXT NOT NULL,
   outlet TEXT,
   image_url TEXT,
   published_at TIMESTAMPTZ,
-  fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (cell_key, url)
+  UNIQUE (event_id, url)
 );
-CREATE INDEX IF NOT EXISTS idx_compass_cell_articles_cell ON compass_cell_articles(cell_key, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_slider_articles_event ON slider_articles(event_id, lean);
 
--- AI-generated search phrases per grid cell (see src/ai/compassQueries.js).
--- Persisted so a redeploy doesn't re-pay 16 Claude calls -- these are
--- ideological phrases, not time-sensitive content.
-CREATE TABLE IF NOT EXISTS compass_cell_terms (
-  cell_key TEXT PRIMARY KEY,
-  terms JSONB NOT NULL,
-  generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+-- Claude-classified outlet leans for outlets missing from the hand-curated
+-- map in src/config/outletLeans.js. Cached so each unknown outlet is
+-- classified at most once.
+CREATE TABLE IF NOT EXISTS outlet_lean_cache (
+  outlet TEXT PRIMARY KEY,
+  lean INT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- "Today's Summary" -- either AI-generated from that day's trending
+-- headlines, or the site owner's own transcript + voice recording,
+-- managed via /admin/summary?key=... (mirrors the /admin/song pattern)
+-- and shown publicly with a Listen button. One row per calendar date.
+-- BYTEA audio for the same ephemeral-filesystem reason as tts_audio_cache.
 CREATE TABLE IF NOT EXISTS daily_summary (
   summary_date DATE PRIMARY KEY,
   text_content TEXT,
