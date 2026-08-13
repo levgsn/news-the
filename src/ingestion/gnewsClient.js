@@ -1,10 +1,20 @@
 const GNEWS_API_URL = "https://gnews.io/api/v4/search";
 
-// GNews treats bare hyphens as query operators, so phrases like
-// "anarcho-capitalism" come back as 400 syntax errors. Wrapping in quotes
-// makes it a literal phrase search.
+// GNews treats hyphens and a few other characters as query operators, so
+// raw terms like "anarcho-capitalism" return 400 syntax errors. Strip
+// those to spaces.
+//
+// Do NOT wrap the result in quotes: that makes it an EXACT-PHRASE search,
+// which is almost always zero results for a multi-word event query
+// (e.g. "Jackson punching incident 1988" matched nothing). Unquoted,
+// GNews ANDs the words, which is what finding coverage of a story needs.
 function sanitizeTerm(term) {
-  return `"${term.replace(/"/g, "")}"`;
+  return term
+    .replace(/["()]/g, " ")
+    .replace(/(^|\s)[-+]|[-+](?=\s|$)/g, " ")
+    .replace(/-/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**

@@ -90,31 +90,48 @@ export async function refreshSliderEvent() {
   if (top.length === 0) return { skipped: true, reason: "no trending story" };
   const headline = top[0].representative_title;
 
+  // Terms are ANDed by GNews, so every extra word shrinks the result set.
+  // Two or three proper nouns find the story; a descriptive phrase finds
+  // nothing.
   let query = null;
   try {
     const raw = await generateText({
       system:
-        "Given a news headline, produce a 2-4 word news-search query capturing the specific EVENT (names, places, bills -- not generic topics), so a search finds other outlets' coverage of that same story. Respond with ONLY the query text, nothing else.",
+        "Given a news headline, return 2-3 SEARCH KEYWORDS that identify the story -- prefer proper nouns (people, places, organizations, bills). A search engine ANDs these words together, so fewer, more distinctive words work better than a descriptive phrase. No quotes, no punctuation, no filler words. Respond with ONLY the keywords separated by spaces.",
       prompt: headline,
       maxTokens: 30,
     });
     query = raw.trim().replace(/^["']|["']$/g, "").slice(0, 80);
   } catch (err) {
     console.error(`[slider] query generation failed: ${err.message}`);
-    // Crude fallback: first few meaningful words of the headline.
-    query = headline.split(/\s+/).slice(0, 4).join(" ");
+    // Crude fallback: the headline's longest words tend to be the
+    // distinctive ones (names, places) rather than articles/prepositions.
+    query = headline
+      .split(/\s+/)
+      .filter((w) => w.length > 4)
+      .slice(0, 3)
+      .join(" ");
   }
 
-  // Two searches widen outlet variety: straight coverage plus opinion/reaction.
+  // Progressively broaden: the precise query first, then fewer words, so a
+  // too-narrow query still finds the story rather than returning nothing.
+  const words = query.split(/\s+/);
+  const attempts = [query];
+  if (words.length > 2) attempts.push(words.slice(0, 2).join(" "));
+  if (words.length > 1) attempts.push(words[0]);
+
   const seen = new Set();
   const articles = [];
-  for (const term of [query, `${query} reaction`]) {
+  for (const term of attempts) {
     const batch = await fetchGNews(term, 10);
     for (const a of batch) {
       if (!a.title || !a.url || seen.has(a.url)) continue;
       seen.add(a.url);
       articles.push(a);
     }
+    // Enough outlet variety to fill the spectrum -- stop before spending
+    // more of the free tier's daily quota.
+    if (new Set(articles.map((a) => a.source?.name)).size >= 6) break;
     await sleep(REQUEST_SPACING_MS);
   }
   if (articles.length === 0) return { skipped: true, reason: "no coverage found" };
