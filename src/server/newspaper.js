@@ -475,60 +475,36 @@ export function renderNewspaper({
   .page.active { display: block; }
   @media (max-width: 700px) { .page { padding: 20px 16px 90px; } }
 
-  /* Forward: the outgoing page swings away on its left edge (spine) while
-     the incoming one settles in. Backward mirrors it. */
-  .page.flip-out-fwd { display: block; transform-origin: left center; animation: flipOutFwd .62s ease-in forwards; z-index: 3; position: relative; }
-  .page.flip-in-fwd { animation: flipInFwd .62s ease-out both; }
-  .page.flip-out-back { display: block; transform-origin: right center; animation: flipOutBack .62s ease-in forwards; z-index: 3; position: relative; }
-  .page.flip-in-back { animation: flipInBack .62s ease-out both; }
+  /* Only ONE sheet moves per turn, the way a real newspaper behaves:
+     going forward, the page you're leaving lifts on the spine and swings
+     away, revealing the next page already sitting underneath. Going back,
+     the previous page swings down FROM the spine and lands on top of the
+     one you're looking at -- it collapses onto the stack rather than
+     sliding across. Both hinge on the left edge, so the two directions
+     are exact inverses of each other.
 
-  @keyframes flipOutFwd {
-    0% { transform: rotateY(0deg); opacity: 1; box-shadow: 0 0 24px rgba(0,0,0,0.12); }
-    100% { transform: rotateY(-88deg); opacity: 0; box-shadow: 28px 0 46px rgba(0,0,0,0.34); }
+     The moving sheet is lifted out of flow and overlaid so it covers the
+     stationary page instead of stacking below it in normal flow. */
+  .page.flip-overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    z-index: 5;
+    transform-origin: left center;
+    backface-visibility: hidden;
   }
-  @keyframes flipInFwd {
-    0% { transform: rotateY(70deg); transform-origin: left center; opacity: .2; }
-    100% { transform: rotateY(0deg); transform-origin: left center; opacity: 1; }
-  }
-  @keyframes flipOutBack {
-    0% { transform: rotateY(0deg); opacity: 1; box-shadow: 0 0 24px rgba(0,0,0,0.12); }
-    100% { transform: rotateY(88deg); opacity: 0; box-shadow: -28px 0 46px rgba(0,0,0,0.34); }
-  }
-  @keyframes flipInBack {
-    0% { transform: rotateY(-70deg); transform-origin: right center; opacity: .2; }
-    100% { transform: rotateY(0deg); transform-origin: right center; opacity: 1; }
-  }
+  .page.flip-away { display: block; animation: flipAway .62s ease-in forwards; }
+  .page.flip-onto { display: block; animation: flipOnto .62s ease-out both; }
 
-  /* Corner curl: a triangle of "paper" peeling at the outer corner during
-     the turn, shaded so it reads as a lifted sheet rather than a shape. */
-  .page-corner {
-    position: fixed;
-    width: 190px; height: 190px;
-    pointer-events: none;
-    z-index: 6;
-    opacity: 0;
+  /* Leaving: flat -> edge-on, lifting away toward the reader. */
+  @keyframes flipAway {
+    0% { transform: rotateY(0deg); box-shadow: 0 0 24px rgba(0,0,0,0.12); }
+    100% { transform: rotateY(-92deg); box-shadow: 30px 0 52px rgba(0,0,0,0.34); }
   }
-  .page-corner.curl-fwd {
-    right: 0; bottom: 0;
-    background: linear-gradient(225deg, var(--paper) 0%, #ded8c6 46%, #b9b2a0 62%, rgba(0,0,0,0.18) 76%, transparent 77%);
-    box-shadow: -8px -8px 22px rgba(0,0,0,0.22);
-    animation: curlFwd .62s ease-in-out;
-  }
-  .page-corner.curl-back {
-    left: 0; bottom: 0;
-    background: linear-gradient(135deg, var(--paper) 0%, #ded8c6 46%, #b9b2a0 62%, rgba(0,0,0,0.18) 76%, transparent 77%);
-    box-shadow: 8px -8px 22px rgba(0,0,0,0.22);
-    animation: curlBack .62s ease-in-out;
-  }
-  @keyframes curlFwd {
-    0% { opacity: 0; transform: translate(78px, 78px) rotate(0deg); }
-    38% { opacity: 1; transform: translate(0, 0) rotate(-9deg); }
-    100% { opacity: 0; transform: translate(-190px, -34px) rotate(-30deg); }
-  }
-  @keyframes curlBack {
-    0% { opacity: 0; transform: translate(-78px, 78px) rotate(0deg); }
-    38% { opacity: 1; transform: translate(0, 0) rotate(9deg); }
-    100% { opacity: 0; transform: translate(190px, -34px) rotate(30deg); }
+  /* Returning: edge-on -> flat, falling back down onto the stack. */
+  @keyframes flipOnto {
+    0% { transform: rotateY(-92deg); box-shadow: 30px 0 52px rgba(0,0,0,0.34); }
+    100% { transform: rotateY(0deg); box-shadow: 0 0 24px rgba(0,0,0,0.12); }
   }
 
   /* Honour the OS "reduce motion" setting by default -- but scope it to
@@ -537,13 +513,9 @@ export function renderNewspaper({
      users, which would otherwise silently kill the page turn with no
      way to get it back. */
   @media (prefers-reduced-motion: reduce) {
-    body:not(.anim-on) .page.flip-out-fwd,
-    body:not(.anim-on) .page.flip-in-fwd,
-    body:not(.anim-on) .page.flip-out-back,
-    body:not(.anim-on) .page.flip-in-back { animation: none; }
-    body:not(.anim-on) .page.flip-out-fwd,
-    body:not(.anim-on) .page.flip-out-back { display: none; }
-    body:not(.anim-on) .page-corner { display: none; }
+    body:not(.anim-on) .page.flip-away,
+    body:not(.anim-on) .page.flip-onto { animation: none; }
+    body:not(.anim-on) .page.flip-away { display: none; }
     body:not(.anim-on) .breaking-banner::after { animation: none; }
     body:not(.anim-on) .breaking-banner-text { animation: none; }
   }
@@ -852,7 +824,7 @@ export function renderNewspaper({
 
       if (!animationsEnabled() || opts.instant || n === currentPage || !from) {
         document.querySelectorAll(".page").forEach(function (p) {
-          p.classList.remove("active", "flip-out-fwd", "flip-in-fwd", "flip-out-back", "flip-in-back");
+          p.classList.remove("active", "flip-overlay", "flip-away", "flip-onto");
         });
         to.classList.add("active");
         finishNav(n);
@@ -862,18 +834,21 @@ export function renderNewspaper({
       var forward = n > currentPage;
       flipping = true;
 
-      var corner = document.createElement("div");
-      corner.className = "page-corner " + (forward ? "curl-fwd" : "curl-back");
-      document.body.appendChild(corner);
+      // Exactly one sheet moves. Forward, it's the page being left: it
+      // swings away and uncovers the next one, which is already sitting
+      // underneath. Backward, it's the page being returned to: it falls
+      // shut on top of the page you were reading, which stays put beneath.
+      var mover = forward ? from : to;
+      var stationary = forward ? to : from;
 
-      from.classList.add(forward ? "flip-out-fwd" : "flip-out-back");
-      to.classList.add("active", forward ? "flip-in-fwd" : "flip-in-back");
+      stationary.classList.add("active");
+      mover.classList.add("active", "flip-overlay", forward ? "flip-away" : "flip-onto");
       finishNav(n);
 
       setTimeout(function () {
-        from.classList.remove("active", "flip-out-fwd", "flip-out-back");
-        to.classList.remove("flip-in-fwd", "flip-in-back");
-        if (corner.parentNode) corner.parentNode.removeChild(corner);
+        mover.classList.remove("flip-overlay", "flip-away", "flip-onto");
+        // Either direction, the page being left drops out of the stack.
+        from.classList.remove("active");
         flipping = false;
       }, FLIP_MS);
     }
