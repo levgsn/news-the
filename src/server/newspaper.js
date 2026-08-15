@@ -541,11 +541,29 @@ export function renderNewspaper({
     100% { opacity: 0; transform: translate(190px, -34px) rotate(30deg); }
   }
 
+  /* Honour the OS "reduce motion" setting by default -- but scope it to
+     :not(.anim-on) so the reader can opt back in with the nav toggle.
+     Windows in particular ships with animation effects off for many
+     users, which would otherwise silently kill the page turn with no
+     way to get it back. */
   @media (prefers-reduced-motion: reduce) {
-    .page.flip-out-fwd, .page.flip-in-fwd, .page.flip-out-back, .page.flip-in-back { animation: none; }
-    .page.flip-out-fwd, .page.flip-out-back { display: none; }
-    .page-corner { display: none; }
+    body:not(.anim-on) .page.flip-out-fwd,
+    body:not(.anim-on) .page.flip-in-fwd,
+    body:not(.anim-on) .page.flip-out-back,
+    body:not(.anim-on) .page.flip-in-back { animation: none; }
+    body:not(.anim-on) .page.flip-out-fwd,
+    body:not(.anim-on) .page.flip-out-back { display: none; }
+    body:not(.anim-on) .page-corner { display: none; }
+    body:not(.anim-on) .breaking-banner::after { animation: none; }
+    body:not(.anim-on) .breaking-banner-text { animation: none; }
   }
+  .anim-toggle {
+    background: none; border: 1px solid var(--paper); color: var(--paper);
+    font-family: var(--font-header); font-size: 11px; letter-spacing: 1px;
+    padding: 4px 10px; cursor: pointer; opacity: .8;
+  }
+  .anim-toggle:hover { background: var(--paper); color: var(--ink); opacity: 1; }
+  @media (max-width: 700px) { .anim-toggle { display: none; } }
 
   /* ---------- Cover ---------- */
   .page-cover { display: none; text-align: center; }
@@ -783,6 +801,7 @@ export function renderNewspaper({
     <button type="button" class="nav-btn" id="prevBtn" onclick="prevPage()">&larr; Prev</button>
     <div class="nav-pages" id="navPages"></div>
     <button type="button" class="nav-btn" id="nextBtn" onclick="nextPage()">Next &rarr;</button>
+    <button type="button" class="anim-toggle" id="animToggle" onclick="toggleAnimation()"></button>
   </nav>
 
   <script>
@@ -792,7 +811,38 @@ export function renderNewspaper({
 
     var FLIP_MS = 620;
     var flipping = false;
-    var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    // Animation preference resolves in this order: an explicit choice the
+    // reader made via the nav toggle (persisted), otherwise the OS
+    // "reduce motion" setting. Read live rather than snapshotted once, so
+    // flipping the toggle takes effect on the very next page turn.
+    var ANIM_KEY = "directionews-animate";
+    function animOverride() {
+      try { return localStorage.getItem(ANIM_KEY); } catch (e) { return null; }
+    }
+    function osPrefersReduced() {
+      return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    }
+    function animationsEnabled() {
+      var pref = animOverride();
+      if (pref === "on") return true;
+      if (pref === "off") return false;
+      return !osPrefersReduced();
+    }
+    function applyAnimPreference() {
+      var on = animationsEnabled();
+      document.body.classList.toggle("anim-on", on);
+      var btn = document.getElementById("animToggle");
+      if (btn) {
+        btn.textContent = on ? "Page turn: On" : "Page turn: Off";
+        btn.setAttribute("aria-pressed", String(on));
+      }
+    }
+    function toggleAnimation() {
+      var next = animationsEnabled() ? "off" : "on";
+      try { localStorage.setItem(ANIM_KEY, next); } catch (e) {}
+      applyAnimPreference();
+    }
 
     function pageEl(n) { return document.querySelector('.page[data-page="' + n + '"]'); }
 
@@ -821,7 +871,7 @@ export function renderNewspaper({
       var to = pageEl(n);
       if (!to) return;
 
-      if (reduceMotion || opts.instant || n === currentPage || !from) {
+      if (!animationsEnabled() || opts.instant || n === currentPage || !from) {
         document.querySelectorAll(".page").forEach(function (p) {
           p.classList.remove("active", "flip-out-fwd", "flip-in-fwd", "flip-out-back", "flip-in-back");
         });
@@ -991,6 +1041,7 @@ export function renderNewspaper({
 
     window.addEventListener("load", function () {
       document.body.classList.add("loaded");
+      applyAnimPreference();
       buildRails();
       buildNav();
       setLean(3);
