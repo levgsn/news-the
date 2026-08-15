@@ -384,11 +384,8 @@ export function renderNewspaper({
   sports,
   xData,
   slider,
-  todaysSong,
   dailySummary,
-  defaultTrackId,
 }) {
-  const trackId = todaysSong?.track_id || defaultTrackId;
   const storyCount =
     (breaking ? 1 : 0) +
     trending.length +
@@ -448,26 +445,19 @@ export function renderNewspaper({
     body, .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
   }
 
-  /* ---------- Side rails ---------- */
-  .side-rail { position: fixed; top: 0; bottom: 0; width: 132px; pointer-events: none; z-index: 0; overflow: hidden; }
-  .side-rail-left { left: 0; }
-  .side-rail-right { right: 0; }
-  .side-rail-panel {
-    width: 100%; aspect-ratio: 320/569;
-    background-image: url('/side-art.png'); background-size: contain; background-repeat: no-repeat;
-    opacity: 0.13;
-  }
-  .side-rail-right .side-rail-panel { transform: scaleX(-1); }
-  @media (max-width: 1450px) { .side-rail { display: none; } }
+  /* Side rails removed: the paper is full-bleed now, so the engraved
+     artwork that used to sit in the margins would overlay the copy. */
 
   /* ---------- Paper / pages ---------- */
   /* The paper is a 3D stage so pages can rotate about their spine rather
      than just cross-fading -- that hinge is what sells "turning a page"
      instead of "swapping a slide". */
+  /* Full-bleed: the paper spans the viewport rather than sitting in a
+     centred column, so there's no dead margin either side. */
   .paper {
     position: relative;
-    max-width: 1080px;
-    margin: 0 auto;
+    width: 100%;
+    margin: 0;
     padding: 0;
     z-index: 1;
     perspective: 2400px;
@@ -779,22 +769,11 @@ export function renderNewspaper({
   .nav-page { background: none; border: none; color: var(--paper); font-family: var(--font-header); font-size: 12px; cursor: pointer; padding: 3px 7px; opacity: .65; }
   .nav-page.current { opacity: 1; text-decoration: underline; }
   @media (max-width: 700px) { .nav-pages { display: none; } }
-  .song-widget { position: fixed; right: 14px; bottom: 52px; z-index: 5; }
-  @media (max-width: 900px) { .song-widget { display: none; } }
 </style>
 </head>
 <body>
-  <div class="side-rail side-rail-left" id="sideRailLeft" aria-hidden="true"></div>
-  <div class="side-rail side-rail-right" id="sideRailRight" aria-hidden="true"></div>
-
   <div class="paper" id="paper">
     ${pages.join("\n")}
-  </div>
-
-  <div class="song-widget">
-    <iframe src="https://open.spotify.com/embed/track/${trackId}?utm_source=generator"
-      width="260" height="80" frameborder="0"
-      allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>
   </div>
 
   <nav class="nav-bar">
@@ -990,21 +969,6 @@ export function renderNewspaper({
       if (label) label.textContent = LEAN_NAMES[v];
     }
 
-    function buildRails() {
-      var h = window.innerHeight;
-      var count = Math.ceil(h / (132 * (569 / 320))) + 1;
-      ["sideRailLeft", "sideRailRight"].forEach(function (id) {
-        var rail = document.getElementById(id);
-        if (!rail) return;
-        rail.innerHTML = "";
-        for (var i = 0; i < count; i++) {
-          var p = document.createElement("div");
-          p.className = "side-rail-panel";
-          rail.appendChild(p);
-        }
-      });
-    }
-
     // Reveal anything already on screen for the active page. Elements stay
     // shown once revealed -- they're unobserved on first intersect.
     var io = null;
@@ -1042,14 +1006,11 @@ export function renderNewspaper({
     window.addEventListener("load", function () {
       document.body.classList.add("loaded");
       applyAnimPreference();
-      buildRails();
       buildNav();
       setLean(3);
       var hash = /^#page-(\\d+)$/.exec(window.location.hash);
       goToPage(hash ? Math.min(Number(hash[1]), TOTAL_PAGES - 1) : 0, { instant: true });
     });
-    var rt;
-    window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(buildRails, 200); });
   </script>
 </body>
 </html>`;

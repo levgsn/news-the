@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { getTrendingClusters, getTrendingClustersPriority } from "../ranking/trending.js";
-import { getTodaysSong, getUpcomingSongs, setSongForDate, deleteSongForDate } from "../ranking/songSchedule.js";
 import { getSliderData } from "../ranking/politicalSlider.js";
 import { getLightheartedClusters } from "../ranking/lighthearted.js";
 import { getOrGenerateClusterSummary } from "../ai/summaries.js";
@@ -28,8 +27,7 @@ dotenv.config();
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
-// Static assets (the engraved side-rail artwork). Long cache: the file is
-// content-stable, and it's requested on every page load.
+// Static assets. Long cache: contents are stable.
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "public");
 app.use(express.static(PUBLIC_DIR, { maxAge: "7d" }));
 // Memory storage (not disk) since the recording goes straight into Postgres
@@ -38,11 +36,6 @@ app.use(express.static(PUBLIC_DIR, { maxAge: "7d" }));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY || "";
-
-// Fallback track when no song_schedule row exists for today. Spotify's
-// OFFICIAL embed player for "Changes" by 2Pac (1998 Greatest Hits) --
-// Spotify's own licensed widget; nothing is hosted or reproduced here.
-const DEFAULT_SONG_TRACK_ID = "3pclEGdsAxuNaSU7BGgtFb";
 
 // Priority order for choosing the lead story + filling the Top 10: each
 // tier's top trending stories fill what's left, then the next tier does.
@@ -89,10 +82,9 @@ function renderHeadlineList(clusters) {
 
 app.get("/", async (req, res) => {
   try {
-    const [breakingAndTrending, todaysSong, dailySummary, funClusters, sportsClusters, sports, xData, slider, ...categoryClusters] =
+    const [breakingAndTrending, dailySummary, funClusters, sportsClusters, sports, xData, slider, ...categoryClusters] =
       await Promise.all([
         getTrendingClustersPriority({ tiers: HERO_TIERS, limit: 11 }),
-        getTodaysSong(),
         getTodaysSummary(),
         getLightheartedClusters({ limit: 10 }),
         getTrendingClusters({ category: "sports", limit: 10 }),
@@ -123,8 +115,7 @@ app.get("/", async (req, res) => {
     res.send(
       renderNewspaper({
         breaking, trending, categorySections, funClusters, sportsClusters,
-        sports, xData, slider, todaysSong, dailySummary,
-        defaultTrackId: DEFAULT_SONG_TRACK_ID,
+        sports, xData, slider, dailySummary,
       })
     );
   } catch (err) {
@@ -234,10 +225,10 @@ app.get("/api/daily-summary/audio", async (req, res) => {
   }
 });
 
-// --- Admin: song schedule ---------------------------------------------------
-// Lightweight shared-secret gate (no login system) — set ADMIN_KEY in .env
-// and visit /admin/song?key=YOUR_KEY. Good enough for a low-stakes internal
-// tool; don't share the URL publicly.
+// --- Admin gate ------------------------------------------------------
+// Lightweight shared-secret check (no login system) -- set ADMIN_KEY in
+// .env and append ?key=YOUR_KEY. Fine for a low-stakes internal tool;
+// do not share the URL publicly.
 
 function requireAdminKey(req, res, next) {
   if (!ADMIN_KEY || req.query.key !== ADMIN_KEY) {
@@ -246,79 +237,8 @@ function requireAdminKey(req, res, next) {
   next();
 }
 
-app.get("/admin/song", requireAdminKey, async (req, res) => {
-  try {
-    const upcoming = await getUpcomingSongs();
-    const rows = upcoming
-      .map((s) => {
-        const date = new Date(s.play_date).toISOString().slice(0, 10);
-        return `<tr>
-          <td>${escapeHtml(date)}</td>
-          <td>${escapeHtml(s.track_id)}</td>
-          <td>${escapeHtml(s.label || "")}</td>
-          <td><form method="POST" action="/admin/song/delete?key=${escapeHtml(req.query.key)}" style="display:inline">
-            <input type="hidden" name="play_date" value="${escapeHtml(date)}" />
-            <button type="submit">Remove</button>
-          </form></td>
-        </tr>`;
-      })
-      .join("");
-
-    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Song Schedule Admin</title>
-      <style>
-        body{font-family:'Roboto Condensed',Arial,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;}
-        table{width:100%;border-collapse:collapse;margin-top:20px;}
-        td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left;font-size:14px;}
-        input,button{font-size:14px;padding:6px;}
-        form.add{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:16px;}
-        label{font-size:12px;color:#555;display:block;}
-      </style></head>
-      <body>
-        <h1>Today's Song &mdash; Schedule</h1>
-        <p>Add or change the song for any future date. Find a track's ID in its
-        Spotify URL: <code>open.spotify.com/track/&lt;THIS PART&gt;</code></p>
-        <form class="add" method="POST" action="/admin/song?key=${escapeHtml(req.query.key)}">
-          <div><label>Date</label><input type="date" name="play_date" required /></div>
-          <div><label>Spotify Track ID</label><input type="text" name="track_id" required placeholder="e.g. 3pclEGdsAxuNaSU7BGgtFb" size="30" /></div>
-          <div><label>Label (optional)</label><input type="text" name="label" placeholder="Song &mdash; Artist" size="24" /></div>
-          <button type="submit">Save</button>
-        </form>
-        <table>
-          <thead><tr><th>Date</th><th>Track ID</th><th>Label</th><th></th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="4">No upcoming songs scheduled — today falls back to the default track.</td></tr>`}</tbody>
-        </table>
-      </body></html>`);
-  } catch (err) {
-    console.error("[admin/song] error:", err);
-    res.status(500).send("Something broke. Check server logs.");
-  }
-});
-
-app.post("/admin/song", requireAdminKey, async (req, res) => {
-  try {
-    const { play_date, track_id, label } = req.body;
-    if (!play_date || !track_id) return res.status(400).send("Missing play_date or track_id");
-    await setSongForDate(play_date, track_id.trim(), (label || "").trim());
-    res.redirect(`/admin/song?key=${encodeURIComponent(req.query.key)}`);
-  } catch (err) {
-    console.error("[admin/song POST] error:", err);
-    res.status(500).send("Something broke. Check server logs.");
-  }
-});
-
-app.post("/admin/song/delete", requireAdminKey, async (req, res) => {
-  try {
-    const { play_date } = req.body;
-    if (play_date) await deleteSongForDate(play_date);
-    res.redirect(`/admin/song?key=${encodeURIComponent(req.query.key)}`);
-  } catch (err) {
-    console.error("[admin/song/delete] error:", err);
-    res.status(500).send("Something broke. Check server logs.");
-  }
-});
-
 // --- Admin: today's summary --------------------------------------------
-// Same shared-secret gate as /admin/song. Either generate an AI summary
+// Same shared-secret gate as the admin gate above. Either generate an AI summary
 // from today's trending headlines, or paste your own transcript and/or
 // upload your own voice recording -- whichever was saved most recently
 // (per field) is what the public homepage shows.
