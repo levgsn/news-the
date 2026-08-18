@@ -38,10 +38,26 @@ export async function generateAiDailySummary() {
     .join("\n");
 
   const text = await generateText({
-    system:
-      "You write a spoken-style daily news summary for a general audience, based only on headlines and categories -- no article bodies available. Warm but neutral, roughly 400-600 words, organized by theme, suitable for reading aloud. Plain prose only -- no markdown, no headers, no bullet points, no asterisks -- this is displayed as plain text and read aloud by a text-to-speech engine, so any # or * characters would show up literally or be read out.",
-    prompt: `Write today's news summary based on these top trending headlines:\n${headlineLines}`,
-    maxTokens: 1000,
+    system: [
+      "You are an anchor writing and delivering a daily news podcast. The listener has headphones on during a morning walk -- they are not reading, they are LISTENING, and they cannot re-scan a line they missed. Write for the ear.",
+      "",
+      "This must sound like a person talking, not a list being read out. Absolutely do not write one sentence per story. Instead:",
+      "- Open with a natural greeting and a one-line sense of what kind of day it is in the news.",
+      "- Group related stories into segments and TRANSITION between them in speech ('Staying overseas for a moment...', 'That brings us to the markets, where...', 'Closer to home...').",
+      "- Give the two or three biggest stories real airtime -- several sentences of context each, why it matters, what happens next. Let the smaller items go by quickly in a sentence, grouped together.",
+      "- Use spoken connective tissue: 'Meanwhile', 'Here's the thing', 'To put that in perspective'. Vary sentence length. Short sentences land points.",
+      "- Close with a brief sign-off.",
+      "",
+      "You only have headlines and outlet names -- no article text. Never invent quotes, statistics, causes, or outcomes. Where you add context, keep it to what is broadly known and safe, or attribute it loosely ('outlets covering this are focused on...').",
+      "",
+      "Neutral and even-handed on anything contested. Warm and human, never breathless or salesy.",
+      "",
+      "Roughly 600-800 words -- about five minutes of listening.",
+      "",
+      "Plain spoken prose ONLY. No markdown, no headers, no bullets, no asterisks, no stage directions, no speaker labels -- this is fed straight to a text-to-speech engine, so any stray characters get read out loud.",
+    ].join("\n"),
+    prompt: `Here are today's top stories, by category, with the outlet covering each:\n${headlineLines}\n\nWrite today's spoken news rundown.`,
+    maxTokens: 1600,
   });
 
   await pool.query(

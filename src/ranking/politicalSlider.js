@@ -2,7 +2,7 @@ import { pool } from "../db/client.js";
 import { generateText } from "../ai/claude.js";
 import { fetchGNews } from "../ingestion/gnewsClient.js";
 import { getTrendingClustersPriority } from "./trending.js";
-import { OUTLET_LEANS } from "../config/outletLeans.js";
+import { resolveOutletLeans } from "./outletLean.js";
 
 // GNews free tier paces poorly under bursts; a short gap between the
 // slider's handful of daily requests keeps it well clear of 429s.
@@ -16,60 +16,6 @@ function parseJson(raw) {
   } catch {
     return null;
   }
-}
-
-/**
- * Resolves each outlet name to a 1-5 lean: hand-curated map first
- * (config/outletLeans.js), then the DB cache of past Claude calls, and
- * only genuinely-new outlets go to Claude -- classified once in a single
- * batched call, then cached forever.
- */
-async function classifyOutlets(outlets) {
-  const result = new Map();
-  const unknown = [];
-
-  for (const outlet of outlets) {
-    if (OUTLET_LEANS[outlet] !== undefined) result.set(outlet, OUTLET_LEANS[outlet]);
-    else unknown.push(outlet);
-  }
-
-  if (unknown.length > 0) {
-    const { rows } = await pool.query(`SELECT outlet, lean FROM outlet_lean_cache WHERE outlet = ANY($1)`, [unknown]);
-    for (const row of rows) result.set(row.outlet, row.lean);
-  }
-
-  const stillUnknown = unknown.filter((o) => !result.has(o));
-  if (stillUnknown.length > 0) {
-    try {
-      const raw = await generateText({
-        system:
-          "You classify news outlets by political lean on a 1-5 scale: 1 far left, 2 moderate left, 3 center, 4 moderate right, 5 far right. Use general media-bias consensus (AllSides/Ad Fontes style). If an outlet is obscure or apolitical (local TV, sports, entertainment trade press), use 3. Respond with ONLY a JSON object mapping each outlet name to an integer 1-5, no markdown.",
-        prompt: `Classify these outlets: ${JSON.stringify(stillUnknown)}`,
-        maxTokens: 400,
-      });
-      const parsed = parseJson(raw);
-      if (parsed && typeof parsed === "object") {
-        for (const outlet of stillUnknown) {
-          const lean = Number(parsed[outlet]);
-          const valid = Number.isInteger(lean) && lean >= 1 && lean <= 5 ? lean : 3;
-          result.set(outlet, valid);
-          await pool.query(
-            `INSERT INTO outlet_lean_cache (outlet, lean) VALUES ($1, $2) ON CONFLICT (outlet) DO NOTHING`,
-            [outlet, valid]
-          );
-        }
-      }
-    } catch (err) {
-      console.error(`[slider] outlet classification failed: ${err.message}`);
-    }
-  }
-
-  // Anything still unresolved (Claude failed) defaults to center rather
-  // than being dropped -- but is NOT cached, so it gets retried next run.
-  for (const outlet of outlets) {
-    if (!result.has(outlet)) result.set(outlet, 3);
-  }
-  return result;
 }
 
 /**
@@ -137,7 +83,7 @@ export async function refreshSliderEvent() {
   if (articles.length === 0) return { skipped: true, reason: "no coverage found" };
 
   const outlets = [...new Set(articles.map((a) => a.source?.name || "Unknown"))];
-  const leans = await classifyOutlets(outlets);
+  const leans = await resolveOutletLeans(outlets);
 
   const { rows: ev } = await pool.query(
     `INSERT INTO slider_events (event_date, headline, query) VALUES (CURRENT_DATE, $1, $2)

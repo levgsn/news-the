@@ -1,5 +1,5 @@
 import { CATEGORIES } from "../config/categories.js";
-import { LEAN_LABELS } from "../config/outletLeans.js";
+import { LEAN_LABELS, LEAN_SHORT, LEAN_COLORS } from "../config/outletLeans.js";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -60,6 +60,31 @@ function thumb(imageUrl, label, cls, isStock = false) {
   return `<div class="${cls}" data-fallback-color="${color}" data-fallback-label="${escapeHtml(label || "")}">${inner}${tag}</div>`;
 }
 
+// Political lean of the outlet carrying the story, blue (left) through
+// grey (centre) to red (right). Returns "" when lean is absent, which is
+// how the Fun & Odd page opts out.
+function leanChip(lean) {
+  if (!lean || !LEAN_COLORS[lean]) return "";
+  const { bg, fg } = LEAN_COLORS[lean];
+  return `<span class="lean-chip" style="background:${bg};color:${fg}" title="${escapeHtml(LEAN_LABELS[lean])} — based on the outlet's general editorial lean">${escapeHtml(LEAN_SHORT[lean])}</span>`;
+}
+
+// Shared thumbnail card. `showLean` is off for the Fun & Odd page.
+function trendingCard(c, showLean = true) {
+  const when = formatWhen(c.top_published_at);
+  return `<div class="tr-card">
+    <a class="tr-link" href="${escapeHtml(c.top_url || "#")}" target="_blank" rel="noopener">
+      ${thumb(c.top_image, c.top_source, "tr-thumb", c.top_image_is_stock)}
+      <div class="tr-title">${escapeHtml(c.representative_title || "")}</div>
+    </a>
+    <div class="tr-meta">
+      ${showLean ? leanChip(c.lean) : ""}
+      <span>${escapeHtml(c.top_source || "")}${when ? ` &middot; ${when}` : ""}</span>
+    </div>
+    ${summaryControls(c.id)}
+  </div>`;
+}
+
 // Per-story AI controls. Nothing fires until the reader clicks: the text
 // summary on "Summarize", and audio only on the separate Listen button.
 function summaryControls(clusterId) {
@@ -75,8 +100,11 @@ function headlineRow(c) {
   const when = formatWhen(c.top_published_at);
   const count = Number(c.source_count) || 1;
   return `<div class="headline">
-    <a href="${escapeHtml(c.top_url || "#")}" target="_blank" rel="noopener">${escapeHtml((c.representative_title || "").toUpperCase())}</a>
-    <span class="meta">(${escapeHtml(c.top_source || "")}${count > 1 ? ` +${count - 1} more` : ""}${when ? ` &middot; ${when}` : ""})</span>
+    <a href="${escapeHtml(c.top_url || "#")}" target="_blank" rel="noopener">${escapeHtml(c.representative_title || "")}</a>
+    <div class="headline-meta">
+      ${leanChip(c.lean)}
+      <span class="meta">${escapeHtml(c.top_source || "")}${count > 1 ? ` +${count - 1} more` : ""}${when ? ` &middot; ${when}` : ""}</span>
+    </div>
     ${summaryControls(c.id)}
   </div>`;
 }
@@ -124,24 +152,13 @@ function renderFrontPage(breaking, trending, dailySummary) {
           ${thumb(breaking.top_image, breaking.top_source, "breaking-thumb", breaking.top_image_is_stock)}
           <h2 class="breaking-title">${escapeHtml(breaking.representative_title || "")}</h2>
         </a>
-        <div class="breaking-meta">${escapeHtml(breaking.top_source || "")}${formatWhen(breaking.top_published_at) ? ` &middot; ${formatWhen(breaking.top_published_at)}` : ""}</div>
+        <div class="breaking-meta">${leanChip(breaking.lean)}<span>${escapeHtml(breaking.top_source || "")}${formatWhen(breaking.top_published_at) ? ` &middot; ${formatWhen(breaking.top_published_at)}` : ""}</span></div>
         ${summaryControls(breaking.id)}
       </div>`
     : `<p class="empty">No breaking story yet today.</p>`;
 
   const cards = trending.length
-    ? trending
-        .map(
-          (c) => `<div class="tr-card">
-            <a class="tr-link" href="${escapeHtml(c.top_url || "#")}" target="_blank" rel="noopener">
-              ${thumb(c.top_image, c.top_source, "tr-thumb", c.top_image_is_stock)}
-              <div class="tr-title">${escapeHtml(c.representative_title || "")}</div>
-              <div class="tr-meta">${escapeHtml(c.top_source || "")}${formatWhen(c.top_published_at) ? ` &middot; ${formatWhen(c.top_published_at)}` : ""}</div>
-            </a>
-            ${summaryControls(c.id)}
-          </div>`
-        )
-        .join("\n")
+    ? trending.map((c) => trendingCard(c)).join("\n")
     : `<p class="empty">No trending stories yet &mdash; run <code>npm run ingest</code>.</p>`;
 
   return `<section class="page" data-page="1">
@@ -225,19 +242,10 @@ function renderXPage(xData) {
 // ---------------------------------------------------------------------------
 
 function renderFunPage(funClusters) {
+  // showLean = false: a political badge on a story about a kitten stuck in
+  // a fence is noise, not information.
   const body = funClusters.length
-    ? `<div class="tr-grid">${funClusters
-        .map(
-          (c) => `<div class="tr-card">
-            <a class="tr-link" href="${escapeHtml(c.top_url || "#")}" target="_blank" rel="noopener">
-              ${thumb(c.top_image, c.top_source, "tr-thumb", c.top_image_is_stock)}
-              <div class="tr-title">${escapeHtml(c.representative_title || "")}</div>
-              <div class="tr-meta">${escapeHtml(c.top_source || "")}${formatWhen(c.top_published_at) ? ` &middot; ${formatWhen(c.top_published_at)}` : ""}</div>
-            </a>
-            ${summaryControls(c.id)}
-          </div>`
-        )
-        .join("\n")}</div>`
+    ? `<div class="tr-grid">${funClusters.map((c) => trendingCard(c, false)).join("\n")}</div>`
     : `<p class="empty">No odd news yet &mdash; the fun/odd feeds populate on the next ingest run.</p>`;
 
   return `<section class="page" data-page="3">
@@ -324,9 +332,16 @@ function renderSliderPage(slider) {
     <div class="slider-event">${escapeHtml(slider.headline)}</div>
 
     <div class="slider-control">
-      <input type="range" min="1" max="5" step="1" value="3" id="leanSlider" oninput="setLean(this.value)" />
+      <div class="slider-track" id="leanTrack" role="slider"
+           aria-valuemin="1" aria-valuemax="5" aria-valuenow="3" aria-label="Political lean" tabindex="0">
+        <div class="slider-fill"></div>
+        <div class="slider-stops">
+          <span data-stop="1"></span><span data-stop="2"></span><span data-stop="3"></span><span data-stop="4"></span><span data-stop="5"></span>
+        </div>
+        <div class="slider-handle" id="leanHandle"></div>
+      </div>
       <div class="slider-ticks">
-        <span>1<br/>Far Left</span><span>2<br/>Mod. Left</span><span>3<br/>Center</span><span>4<br/>Mod. Right</span><span>5<br/>Far Right</span>
+        <span>Far Left</span><span>Left</span><span>Center</span><span>Right</span><span>Far Right</span>
       </div>
       <div class="slider-current" id="leanCurrent">Center</div>
     </div>
@@ -413,17 +428,26 @@ export function renderNewspaper({
 <title>DirectioNews</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;700;900&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700;8..60,900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <style>
+  /* Modern news-site type system: a screen-designed serif for anything
+     editorial (headlines, body, the masthead) and Inter for UI furniture
+     (labels, meta, buttons). Near-black rather than pure black, and white
+     paper rather than cream -- that pairing is what reads as contemporary
+     rather than "olde newspaper". */
   :root {
-    --ink: #111;
-    --paper: #f4f1e8;
-    --paper-edge: #e8e3d5;
-    --link: #111;
-    --meta: #666;
-    --rule: #111;
-    --font: 'Times New Roman', Times, serif;
-    --font-header: 'Roboto Condensed', Arial, Helvetica, sans-serif;
+    --ink: #16181d;
+    --ink-soft: #3d424b;
+    --paper: #ffffff;
+    --paper-edge: #eceef1;
+    --link: #16181d;
+    --meta: #6b7280;
+    --rule: #16181d;
+    --hairline: #e3e6ea;
+    --accent: #c1121f;
+    --font: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+    --font-header: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -533,45 +557,55 @@ export function renderNewspaper({
   .cover-inner { width: 100%; max-width: 760px; }
   .cover-rule { border-top: 3px double var(--rule); margin: 10px 0; }
   .cover-masthead {
-    font-family: var(--font-header);
-    font-weight: 900;
-    font-size: clamp(44px, 10vw, 104px);
-    line-height: 1;
-    margin: 12px 0;
-    letter-spacing: 1px;
-  }
-  .cover-date { font-size: 17px; letter-spacing: 2px; text-transform: uppercase; margin-top: 14px; }
-  .cover-tagline { font-family: var(--font-header); font-size: 15px; letter-spacing: 4px; text-transform: uppercase; color: var(--meta); margin-top: 6px; }
-  .cover-count { font-size: 14px; color: var(--meta); margin-top: 26px; font-style: italic; }
-  .cover-cta {
-    margin-top: 30px;
     font-family: var(--font);
-    font-size: 20px;
-    padding: 14px 30px;
-    background: var(--ink);
-    color: var(--paper);
-    border: none;
-    cursor: pointer;
-    letter-spacing: 1px;
+    font-weight: 900;
+    font-size: clamp(46px, 10vw, 112px);
+    line-height: 0.98;
+    margin: 16px 0;
+    letter-spacing: -0.035em;
   }
-  .cover-cta:hover { background: #333; }
+  .cover-date {
+    font-family: var(--font-ui); font-size: 13px; font-weight: 600;
+    letter-spacing: 0.16em; text-transform: uppercase; margin-top: 18px; color: var(--ink-soft);
+  }
+  .cover-tagline {
+    font-family: var(--font-ui); font-size: 12px; font-weight: 500;
+    letter-spacing: 0.3em; text-transform: uppercase; color: var(--meta); margin-top: 8px;
+  }
+  .cover-count { font-family: var(--font-ui); font-size: 14px; color: var(--meta); margin-top: 30px; }
+  .cover-cta {
+    margin-top: 32px;
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 15px 32px;
+    background: var(--ink);
+    color: #fff;
+    border: none;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background .18s ease, transform .18s ease;
+  }
+  .cover-cta:hover { background: var(--accent); transform: translateY(-1px); }
   .cover-arrow { display: inline-block; margin-left: 10px; transition: transform .25s ease; }
   .cover-cta:hover .cover-arrow { transform: translateX(6px); }
 
   /* ---------- Page furniture ---------- */
   .page-head {
-    display: flex; align-items: baseline; justify-content: space-between;
+    display: flex; align-items: center; justify-content: space-between;
     gap: 12px; flex-wrap: wrap;
-    border-bottom: 3px double var(--rule); padding-bottom: 8px; margin-bottom: 18px;
+    border-bottom: 2px solid var(--ink); padding-bottom: 12px; margin-bottom: 26px;
   }
-  .page-head-brand { font-family: var(--font-header); font-weight: 900; font-size: 22px; }
-  .page-head-title { font-size: 20px; font-style: italic; }
-  .page-head-date { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--meta); }
-  .page-kicker { font-style: italic; color: var(--meta); margin: 0 0 18px; }
+  .page-head-brand { font-family: var(--font); font-weight: 900; font-size: 24px; letter-spacing: -0.025em; }
+  .page-head-title { font-family: var(--font-ui); font-size: 13px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
+  .page-head-date { font-family: var(--font-ui); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; color: var(--meta); }
+  .page-kicker { font-family: var(--font-ui); font-size: 14px; color: var(--meta); margin: 0 0 24px; }
   .section-rule {
-    font-family: var(--font-header);
-    font-size: 14px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
-    border-bottom: 1px solid var(--rule); padding-bottom: 4px; margin: 26px 0 14px;
+    font-family: var(--font-ui);
+    font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink);
+    border-bottom: 2px solid var(--ink); padding-bottom: 8px; margin: 34px 0 18px;
   }
 
   /* ---------- Breaking ---------- */
@@ -621,8 +655,15 @@ export function renderNewspaper({
   .breaking-link { text-decoration: none; color: inherit; display: block; }
   .breaking-thumb { width: 100%; max-height: 320px; aspect-ratio: 16/7; overflow: hidden; border: 1px solid #ccc; margin-bottom: 12px; }
   .breaking-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .breaking-title { font-size: clamp(26px, 4vw, 42px); line-height: 1.12; margin: 0; font-weight: 700; }
-  .breaking-meta { font-size: 12px; color: var(--meta); margin-top: 8px; }
+  .breaking-title {
+    font-size: clamp(28px, 4.2vw, 46px); line-height: 1.1; margin: 0;
+    font-weight: 700; letter-spacing: -0.025em;
+  }
+  .breaking-link:hover .breaking-title { color: var(--accent); }
+  .breaking-meta {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    font-family: var(--font-ui); font-size: 13px; color: var(--meta); margin-top: 12px;
+  }
 
   /* ---------- Trending grid ---------- */
   .tr-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
@@ -631,8 +672,15 @@ export function renderNewspaper({
   .tr-link { text-decoration: none; color: inherit; }
   .tr-thumb { width: 100%; aspect-ratio: 16/10; overflow: hidden; background: #e8e3d5; border: 1px solid #ccc; }
   .tr-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .tr-title { font-weight: 700; font-size: 14px; margin-top: 6px; line-height: 1.25; }
-  .tr-meta { font-size: 11px; color: var(--meta); }
+  .tr-title {
+    font-weight: 600; font-size: 16px; margin-top: 10px;
+    line-height: 1.28; letter-spacing: -0.01em; color: var(--ink);
+  }
+  .tr-link:hover .tr-title { color: var(--accent); }
+  .tr-meta {
+    display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+    font-family: var(--font-ui); font-size: 12px; color: var(--meta); margin-top: 6px;
+  }
   .thumb-placeholder {
     width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
     font-size: 11px; font-weight: 700; text-align: center; padding: 6px; color: #444;
@@ -648,25 +696,46 @@ export function renderNewspaper({
   }
 
   /* ---------- Headlines ---------- */
-  .headline { margin-bottom: 14px; }
-  .headline a { color: var(--link); font-weight: 700; text-decoration: none; font-size: 15px; }
-  .headline a:hover { text-decoration: underline; }
-  .meta { color: var(--meta); font-size: 11px; margin-left: 6px; }
-  .empty { color: var(--meta); font-size: 13px; font-style: italic; }
+  .headline { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--hairline); }
+  .headline:last-child { border-bottom: none; }
+  .headline a {
+    color: var(--link); font-weight: 600; text-decoration: none;
+    font-size: 19px; line-height: 1.3; letter-spacing: -0.01em;
+    display: block;
+  }
+  .headline a:hover { color: var(--accent); }
+  .headline-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 7px; }
+  .meta { color: var(--meta); font-family: var(--font-ui); font-size: 12px; letter-spacing: 0.01em; }
+  .empty { color: var(--meta); font-family: var(--font-ui); font-size: 14px; }
+
+  /* ---------- Lean chips ---------- */
+  .lean-chip {
+    font-family: var(--font-ui);
+    font-size: 10px; font-weight: 700;
+    letter-spacing: 0.07em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 3px; white-space: nowrap;
+  }
 
   /* ---------- Buttons ---------- */
   .summarize-btn, .play-btn, .close-btn {
-    font-family: var(--font); font-size: 11px; padding: 3px 9px;
-    border: 1px solid #999; background: #fff; cursor: pointer; margin-right: 4px; margin-top: 4px;
+    font-family: var(--font-ui); font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+    padding: 5px 11px; border: 1px solid var(--hairline); background: #f7f8f9;
+    color: var(--ink-soft); border-radius: 999px; cursor: pointer;
+    margin-right: 5px; margin-top: 8px; transition: background .15s ease, color .15s ease;
   }
-  .summarize-btn:hover, .play-btn:hover, .close-btn:hover { background: #eee; }
-  .summarize-btn:disabled { opacity: .6; cursor: default; }
-  .summary-text { font-size: 12px; color: #333; margin: 6px 0; line-height: 1.45; }
+  .summarize-btn:hover, .play-btn:hover, .close-btn:hover { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .summarize-btn:disabled { opacity: .55; cursor: default; }
+  .summary-text {
+    font-family: var(--font); font-size: 15px; color: var(--ink-soft);
+    margin: 10px 0 4px; line-height: 1.6;
+    border-left: 2px solid var(--hairline); padding-left: 12px;
+  }
   .big-btn {
-    font-family: var(--font); font-size: 15px; padding: 9px 18px;
-    border: 1px solid var(--ink); background: var(--ink); color: var(--paper); cursor: pointer; margin-right: 8px;
+    font-family: var(--font-ui); font-size: 14px; font-weight: 600; padding: 11px 22px;
+    border: none; background: var(--ink); color: #fff; border-radius: 999px;
+    cursor: pointer; margin-right: 8px; transition: background .18s ease;
   }
-  .big-btn:hover { background: #333; }
+  .big-btn:hover { background: var(--accent); }
   .big-btn:disabled { opacity: .6; cursor: default; }
   .front-actions { margin-bottom: 12px; }
   .front-summary { font-size: 14px; line-height: 1.6; white-space: pre-wrap; margin-bottom: 16px; }
@@ -703,20 +772,81 @@ export function renderNewspaper({
   .score-status { font-size: 11px; color: var(--meta); text-align: right; }
 
   /* ---------- Political slider ---------- */
-  .slider-event { font-size: 20px; font-weight: 700; line-height: 1.25; margin-bottom: 18px; border-left: 4px solid var(--ink); padding-left: 12px; }
-  .slider-control { margin: 20px 0 26px; }
-  #leanSlider { width: 100%; }
-  .slider-ticks { display: flex; justify-content: space-between; font-size: 11px; text-align: center; color: var(--meta); margin-top: 4px; }
-  .slider-ticks span { flex: 1; }
-  .slider-current { text-align: center; font-family: var(--font-header); font-size: 18px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; margin-top: 10px; }
+  .slider-event {
+    font-size: 25px; font-weight: 600; line-height: 1.26; letter-spacing: -0.015em;
+    margin-bottom: 26px; border-left: 3px solid var(--accent); padding-left: 15px;
+  }
+  .slider-control { margin: 26px auto 34px; max-width: 620px; }
+
+  /* One continuous blue -> grey -> red gradient. Position along the track
+     IS the reading, so the colour never needs a key. */
+  .slider-track {
+    position: relative;
+    height: 12px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #1d4ed8 0%, #93c5fd 25%, #d4d7dc 50%, #fca5a5 75%, #b91c1c 100%);
+    cursor: pointer;
+    touch-action: none;
+    outline: none;
+  }
+  .slider-track:focus-visible { box-shadow: 0 0 0 3px rgba(29,78,216,0.35); }
+  .slider-stops { position: absolute; inset: 0; }
+  .slider-stops span {
+    position: absolute; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
+    border-radius: 50%; background: rgba(255,255,255,0.75); transition: opacity .2s ease;
+  }
+  .slider-stops span[data-stop="1"] { left: 0%; }
+  .slider-stops span[data-stop="2"] { left: 25%; }
+  .slider-stops span[data-stop="3"] { left: 50%; }
+  .slider-stops span[data-stop="4"] { left: 75%; }
+  .slider-stops span[data-stop="5"] { left: 100%; }
+  .slider-stops span.on { opacity: 0; }
+  .slider-handle {
+    position: absolute; top: 50%; left: 50%;
+    width: 26px; height: 26px; margin: -13px 0 0 -13px;
+    border-radius: 50%; background: #d4d7dc;
+    border: 3px solid #fff;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.28);
+    transition: left .18s cubic-bezier(.2,.8,.3,1), background .18s ease, transform .12s ease;
+    pointer-events: none;
+  }
+  /* While dragging, drop the easing so the handle sits exactly under the
+     cursor instead of lagging behind it. */
+  .slider-track.dragging .slider-handle { transition: background .18s ease; transform: scale(1.15); }
+  .slider-ticks {
+    display: flex; justify-content: space-between;
+    font-family: var(--font-ui); font-size: 11px; font-weight: 500;
+    letter-spacing: 0.04em; text-transform: uppercase; color: var(--meta); margin-top: 12px;
+  }
+  .slider-ticks span { flex: 1; text-align: center; }
+  .slider-ticks span:first-child { text-align: left; }
+  .slider-ticks span:last-child { text-align: right; }
+  .slider-current {
+    text-align: center; font-family: var(--font-ui);
+    font-size: 20px; font-weight: 700; letter-spacing: -0.01em; margin-top: 16px;
+    transition: color .2s ease;
+  }
+
   .slider-panel { display: none; }
   .slider-panel.active { display: block; }
-  .slider-panel-head { font-family: var(--font-header); font-size: 15px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--rule); padding-bottom: 5px; margin-bottom: 12px; }
-  .slider-num { display: inline-block; background: var(--ink); color: var(--paper); width: 22px; height: 22px; line-height: 22px; text-align: center; margin-right: 6px; }
-  .slider-article { margin-bottom: 12px; }
-  .slider-article a { color: var(--link); font-weight: 700; text-decoration: none; font-size: 15px; }
-  .slider-article a:hover { text-decoration: underline; }
-  .slider-outlet { font-size: 11px; color: var(--meta); }
+  .slider-panel-head {
+    font-family: var(--font-ui); font-size: 12px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--meta);
+    border-bottom: 1px solid var(--hairline); padding-bottom: 8px; margin-bottom: 18px;
+  }
+  .slider-num {
+    display: inline-block; background: var(--ink); color: #fff;
+    width: 20px; height: 20px; line-height: 20px; border-radius: 4px;
+    text-align: center; margin-right: 8px; font-size: 11px;
+  }
+  .slider-article { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--hairline); }
+  .slider-article:last-child { border-bottom: none; }
+  .slider-article a {
+    color: var(--link); font-weight: 600; text-decoration: none;
+    font-size: 18px; line-height: 1.3; letter-spacing: -0.01em;
+  }
+  .slider-article a:hover { color: var(--accent); }
+  .slider-outlet { font-family: var(--font-ui); font-size: 12px; color: var(--meta); margin-top: 5px; }
 
   /* ---------- Category pages ---------- */
   .cat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 26px; }
@@ -857,6 +987,8 @@ export function renderNewspaper({
 
     document.addEventListener("keydown", function (e) {
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      // Don't hijack arrows away from a focused control that uses them.
+      if (e.target.getAttribute && e.target.getAttribute("role") === "slider") return;
       if (e.key === "ArrowRight") nextPage();
       if (e.key === "ArrowLeft") prevPage();
     });
@@ -936,13 +1068,77 @@ export function renderNewspaper({
     function playDailySummaryAudio() { new Audio("/api/daily-summary/audio").play(); }
 
     var LEAN_NAMES = { 1: "Far Left", 2: "Moderate Left", 3: "Center", 4: "Moderate Right", 5: "Far Right" };
+    var LEAN_HEX = { 1: "#1d4ed8", 2: "#93c5fd", 3: "#d4d7dc", 4: "#fca5a5", 5: "#b91c1c" };
+    var currentLean = 3;
+
     function setLean(v) {
+      v = Math.min(5, Math.max(1, Math.round(Number(v) || 3)));
+      currentLean = v;
       document.querySelectorAll(".slider-panel").forEach(function (p) {
         p.classList.toggle("active", p.dataset.lean === String(v));
       });
       var label = document.getElementById("leanCurrent");
-      if (label) label.textContent = LEAN_NAMES[v];
+      if (label) {
+        label.textContent = LEAN_NAMES[v];
+        label.style.color = v === 3 ? "" : LEAN_HEX[v];
+      }
+      var handle = document.getElementById("leanHandle");
+      var track = document.getElementById("leanTrack");
+      if (handle) {
+        handle.style.left = ((v - 1) / 4) * 100 + "%";
+        handle.style.background = LEAN_HEX[v];
+      }
+      if (track) track.setAttribute("aria-valuenow", String(v));
+      document.querySelectorAll(".slider-stops span").forEach(function (s) {
+        s.classList.toggle("on", Number(s.dataset.stop) === v);
+      });
     }
+
+    // Drag handling: the handle tracks the cursor continuously while held
+    // (pointer capture keeps events coming even if the cursor leaves the
+    // track), snapping to the nearest of the five stops. Clicking anywhere
+    // on the track jumps straight there.
+    (function () {
+      var track = document.getElementById("leanTrack");
+      if (!track) return;
+      var dragging = false;
+
+      function leanFromClientX(clientX) {
+        var r = track.getBoundingClientRect();
+        var pct = (clientX - r.left) / r.width;
+        pct = Math.min(1, Math.max(0, pct));
+        return Math.round(pct * 4) + 1;
+      }
+
+      track.addEventListener("pointerdown", function (e) {
+        dragging = true;
+        track.classList.add("dragging");
+        track.setPointerCapture(e.pointerId);
+        setLean(leanFromClientX(e.clientX));
+        e.preventDefault();
+      });
+      track.addEventListener("pointermove", function (e) {
+        if (!dragging) return;
+        setLean(leanFromClientX(e.clientX));
+      });
+      function endDrag() {
+        if (!dragging) return;
+        dragging = false;
+        track.classList.remove("dragging");
+      }
+      track.addEventListener("pointerup", endDrag);
+      track.addEventListener("pointercancel", endDrag);
+
+      // stopPropagation matters here: the document-level arrow handler
+      // flips pages, so without it an arrow press on the focused slider
+      // would move the slider AND turn the page.
+      track.addEventListener("keydown", function (e) {
+        if (["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp"].indexOf(e.key) === -1) return;
+        setLean(currentLean + (e.key === "ArrowRight" || e.key === "ArrowUp" ? 1 : -1));
+        e.preventDefault();
+        e.stopPropagation();
+      });
+    })();
 
     // Reveal anything already on screen for the active page. Elements stay
     // shown once revealed -- they're unobserved on first intersect.

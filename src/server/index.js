@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import { getTrendingClusters, getTrendingClustersPriority } from "../ranking/trending.js";
 import { getSliderData } from "../ranking/politicalSlider.js";
 import { getLightheartedClusters } from "../ranking/lighthearted.js";
+import { attachLeans } from "../ranking/outletLean.js";
 import { getOrGenerateClusterSummary } from "../ai/summaries.js";
 import { getOrSynthesizeAudio } from "../ai/audioCache.js";
 import { generateText } from "../ai/claude.js";
@@ -111,6 +112,17 @@ app.get("/", async (req, res) => {
     const categorySections = CATEGORIES.map((cat, i) => ({ label: cat.label, clusters: categoryClusters[i] })).filter(
       (s) => s.clusters.length > 0 && s.label !== "Fun / Odd News" && s.label !== "Sports"
     );
+
+    // Political lean chips on every story except the fun page, which is
+    // deliberately unlabelled -- a lean badge on a story about a kitten
+    // stuck in a fence is noise, not information. One batched lookup
+    // covers the whole edition.
+    await attachLeans([
+      breaking,
+      ...trending,
+      ...sportsClusters,
+      ...categorySections.flatMap((s) => s.clusters),
+    ]);
 
     res.send(
       renderNewspaper({

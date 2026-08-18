@@ -13,9 +13,22 @@ export function googleNewsFeed(query) {
 
 export const SOURCES = [
   // --- U.S. Politics ---
+  // Deliberately balanced left/centre/right. The site labels every story
+  // with its outlet's political lean, and an all-centrist lineup (which is
+  // what this was) makes every badge read "Center" -- true, but useless.
+  // A spread of outlets is what gives the labels and the Political Slider
+  // something real to show.
   { name: "Politico", url: "https://rss.politico.com/politics-news.xml", category: "us_politics", weight: 1.0 },
   { name: "The Hill", url: "https://thehill.com/feed/", category: "us_politics", weight: 1.0 },
   { name: "Axios Politics", url: "https://api.axios.com/feed/", category: "us_politics", weight: 1.0 },
+  { name: "CNN", url: "http://rss.cnn.com/rss/cnn_topstories.rss", category: "us_politics", weight: 1.0 },
+  { name: "NPR", url: "https://feeds.npr.org/1001/rss.xml", category: "us_politics", weight: 1.0 },
+  { name: "Guardian US", url: "https://www.theguardian.com/us-news/rss", category: "us_politics", weight: 1.0 },
+  { name: "Mother Jones", url: "https://www.motherjones.com/feed/", category: "us_politics", weight: 0.9 },
+  { name: "Fox News", url: "https://moxie.foxnews.com/google-publisher/latest.xml", category: "us_politics", weight: 1.0 },
+  { name: "New York Post", url: "https://nypost.com/feed/", category: "us_politics", weight: 1.0 },
+  { name: "National Review", url: "https://www.nationalreview.com/feed/", category: "us_politics", weight: 0.9 },
+  { name: "Washington Examiner", url: "https://www.washingtonexaminer.com/feed", category: "us_politics", weight: 0.9 },
 
   // --- World / Geopolitics ---
   { name: "BBC World", url: "http://feeds.bbci.co.uk/news/world/rss.xml", category: "world_geopolitics", weight: 1.1 },
