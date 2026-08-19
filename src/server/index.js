@@ -6,7 +6,7 @@ import dotenv from "dotenv";
 import { getTrendingClusters, getTrendingClustersPriority } from "../ranking/trending.js";
 import { getSliderData } from "../ranking/politicalSlider.js";
 import { getLightheartedClusters } from "../ranking/lighthearted.js";
-import { attachLeans } from "../ranking/outletLean.js";
+import { attachLeans, balanceLeanMix } from "../ranking/outletLean.js";
 import { getOrGenerateClusterSummary } from "../ai/summaries.js";
 import { getOrSynthesizeAudio } from "../ai/audioCache.js";
 import { generateText } from "../ai/claude.js";
@@ -83,21 +83,35 @@ function renderHeadlineList(clusters) {
 
 app.get("/", async (req, res) => {
   try {
-    const [breakingAndTrending, dailySummary, funClusters, sportsClusters, sports, xData, slider, ...categoryClusters] =
+    // Over-fetch every section. Balancing left against right is a
+    // SELECTION step, so it needs a deeper pool than the page shows --
+    // asking for exactly 10 and then balancing can only ever remove
+    // stories, leaving the page short.
+    const HERO_POOL = 40;
+    const CATEGORY_POOL = 30;
+
+    const [heroPool, dailySummary, funClusters, sportsPool, sports, xData, slider, ...categoryPools] =
       await Promise.all([
-        getTrendingClustersPriority({ tiers: HERO_TIERS, limit: 11 }),
+        getTrendingClustersPriority({ tiers: HERO_TIERS, limit: HERO_POOL, maxPerSource: 2 }),
         getTodaysSummary(),
         getLightheartedClusters({ limit: 10 }),
-        getTrendingClusters({ category: "sports", limit: 10 }),
+        getTrendingClusters({ category: "sports", limit: CATEGORY_POOL }),
         getSportsBundle(),
         getXBundle(),
         getSliderData(),
-        ...CATEGORIES.map((cat) => getTrendingClusters({ category: cat.slug, limit: 10 })),
+        ...CATEGORIES.map((cat) => getTrendingClusters({ category: cat.slug, limit: CATEGORY_POOL })),
       ]);
 
-    // Slot 1 is the day's lead story; the rest fill the Top 10 grid.
-    const breaking = breakingAndTrending[0] || null;
-    const trending = breakingAndTrending.slice(1, 11);
+    // Leans must be attached BEFORE balancing, since the balance is
+    // computed from them.
+    await attachLeans([...heroPool, ...sportsPool, ...categoryPools.flat()]);
+
+    // Equal left and right counts on every section that carries lean
+    // chips. Fun & Odd is left alone -- it has no leans by design.
+    const heroBalanced = balanceLeanMix(heroPool, 11);
+    const breaking = heroBalanced[0] || null;
+    const trending = heroBalanced.slice(1, 11);
+    const sportsClusters = balanceLeanMix(sportsPool, 10);
 
     // Every story that renders a thumbnail box gets something in it. First
     // pass scrapes the publisher's own og:image; whatever is still empty
@@ -109,20 +123,10 @@ app.get("/", async (req, res) => {
 
     // Fun/Odd and Sports get dedicated pages, so drop them from the
     // "More Trending" spread to avoid printing the same story twice.
-    const categorySections = CATEGORIES.map((cat, i) => ({ label: cat.label, clusters: categoryClusters[i] })).filter(
-      (s) => s.clusters.length > 0 && s.label !== "Fun / Odd News" && s.label !== "Sports"
-    );
-
-    // Political lean chips on every story except the fun page, which is
-    // deliberately unlabelled -- a lean badge on a story about a kitten
-    // stuck in a fence is noise, not information. One batched lookup
-    // covers the whole edition.
-    await attachLeans([
-      breaking,
-      ...trending,
-      ...sportsClusters,
-      ...categorySections.flatMap((s) => s.clusters),
-    ]);
+    const categorySections = CATEGORIES.map((cat, i) => ({
+      label: cat.label,
+      clusters: balanceLeanMix(categoryPools[i], 10),
+    })).filter((s) => s.clusters.length > 0 && s.label !== "Fun / Odd News" && s.label !== "Sports");
 
     res.send(
       renderNewspaper({

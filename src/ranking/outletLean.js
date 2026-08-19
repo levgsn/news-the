@@ -86,3 +86,52 @@ export async function attachLeans(clusters) {
     c.lean = leans.get(c.top_source) ?? 3;
   }
 }
+
+export const isLeft = (c) => c.lean === 1 || c.lean === 2;
+export const isRight = (c) => c.lean === 4 || c.lean === 5;
+
+/**
+ * Picks `limit` stories from a ranked candidate pool while keeping the
+ * number of left-leaning and right-leaning outlets EQUAL.
+ *
+ * Left and right are paired off one for one, highest-trending first, and
+ * capped at whichever side is scarcer -- so the page can never show four
+ * left-leaning takes against one from the right. Centre coverage fills the
+ * rest, and only if there still aren't enough stories to fill the page
+ * does it fall back to unpaired leftovers rather than render a short page.
+ *
+ * Input must already have `lean` attached (see attachLeans) and be sorted
+ * by whatever ranking the caller wants preserved.
+ */
+export function balanceLeanMix(pool, limit) {
+  const left = pool.filter(isLeft);
+  const right = pool.filter(isRight);
+  const centre = pool.filter((c) => !isLeft(c) && !isRight(c));
+
+  // Never let one side outnumber the other, and don't let the paired
+  // stories crowd centre coverage off the page entirely.
+  const maxPerSide = Math.min(left.length, right.length, Math.floor(limit / 2));
+
+  const picked = [];
+  for (let i = 0; i < maxPerSide; i++) {
+    picked.push(left[i], right[i]);
+  }
+  for (const c of centre) {
+    if (picked.length >= limit) break;
+    picked.push(c);
+  }
+  // Leftovers are only ever added in PAIRS. Topping the page up with
+  // whichever side happens to have spare stories is what broke the
+  // balance the pairing above just created, so a page runs short rather
+  // than lopsided -- an even split is the point of this function.
+  let li = maxPerSide;
+  let ri = maxPerSide;
+  while (picked.length + 2 <= limit && li < left.length && ri < right.length) {
+    picked.push(left[li++], right[ri++]);
+  }
+
+  // Restore the pool's original ranking -- the pairing above is a
+  // selection mechanism, not a running order.
+  const order = new Map(pool.map((c, i) => [c.id, i]));
+  return picked.sort((a, b) => order.get(a.id) - order.get(b.id)).slice(0, limit);
+}

@@ -331,19 +331,21 @@ function renderSliderPage(slider) {
     <p class="page-kicker">One story, five vantage points. Slide to see how coverage shifts across the spectrum.</p>
     <div class="slider-event">${escapeHtml(slider.headline)}</div>
 
-    <div class="slider-control">
-      <div class="slider-track" id="leanTrack" role="slider"
-           aria-valuemin="1" aria-valuemax="5" aria-valuenow="3" aria-label="Political lean" tabindex="0">
-        <div class="slider-fill"></div>
-        <div class="slider-stops">
-          <span data-stop="1"></span><span data-stop="2"></span><span data-stop="3"></span><span data-stop="4"></span><span data-stop="5"></span>
-        </div>
-        <div class="slider-handle" id="leanHandle"></div>
+    <div class="lean-selector" role="radiogroup" aria-label="Select political lean">
+      <div class="lean-line" aria-hidden="true"></div>
+      <div class="lean-stops">
+        ${[1, 2, 3, 4, 5]
+          .map(
+            (n) => `<button type="button" class="lean-stop" data-lean="${n}" role="radio"
+              aria-checked="${n === 3 ? "true" : "false"}" aria-label="${escapeHtml(LEAN_LABELS[n])}"
+              onclick="setLean(${n})">
+              <span class="lean-dot"></span>
+              <span class="lean-stop-num">${n}</span>
+              <span class="lean-stop-label">${escapeHtml(LEAN_LABELS[n])}</span>
+            </button>`
+          )
+          .join("")}
       </div>
-      <div class="slider-ticks">
-        <span>Far Left</span><span>Left</span><span>Center</span><span>Right</span><span>Far Right</span>
-      </div>
-      <div class="slider-current" id="leanCurrent">Center</div>
     </div>
 
     <div class="slider-panels">${buckets}</div>
@@ -517,18 +519,33 @@ export function renderNewspaper({
     transform-origin: left center;
     backface-visibility: hidden;
   }
-  .page.flip-away { display: block; animation: flipAway .62s ease-in forwards; }
-  .page.flip-onto { display: block; animation: flipOnto .62s ease-out both; }
+  /* Eased rather than linear-ish: paper accelerates as it falls and
+     settles rather than stopping dead, so both curves are weighted
+     toward a soft finish. Slightly longer, too -- .62s read as a snap. */
+  .page.flip-away { display: block; animation: flipAway .78s cubic-bezier(.42,0,.62,.5) forwards; }
+  .page.flip-onto { display: block; animation: flipOnto .78s cubic-bezier(.28,.72,.32,1) both; }
 
   /* Leaving: flat -> edge-on, lifting away toward the reader. */
   @keyframes flipAway {
     0% { transform: rotateY(0deg); box-shadow: 0 0 24px rgba(0,0,0,0.12); }
+    55% { transform: rotateY(-52deg); box-shadow: 22px 0 42px rgba(0,0,0,0.26); }
     100% { transform: rotateY(-92deg); box-shadow: 30px 0 52px rgba(0,0,0,0.34); }
   }
   /* Returning: edge-on -> flat, falling back down onto the stack. */
   @keyframes flipOnto {
     0% { transform: rotateY(-92deg); box-shadow: 30px 0 52px rgba(0,0,0,0.34); }
+    55% { transform: rotateY(-32deg); box-shadow: 18px 0 38px rgba(0,0,0,0.24); }
     100% { transform: rotateY(0deg); box-shadow: 0 0 24px rgba(0,0,0,0.12); }
+  }
+  /* Content settles in just behind the sheet, so the page doesn't appear
+     fully formed the instant the turn starts. */
+  .page.flip-onto .page-head, .page.flip-onto .tr-grid,
+  .page.flip-onto .breaking, .page.flip-onto .cat-grid {
+    animation: settle .5s ease-out .16s both;
+  }
+  @keyframes settle {
+    from { opacity: .5; transform: translateY(5px); }
+    to { opacity: 1; transform: none; }
   }
 
   /* Honour the OS "reduce motion" setting by default -- but scope it to
@@ -776,55 +793,58 @@ export function renderNewspaper({
     font-size: 25px; font-weight: 600; line-height: 1.26; letter-spacing: -0.015em;
     margin-bottom: 26px; border-left: 3px solid var(--accent); padding-left: 15px;
   }
-  .slider-control { margin: 26px auto 34px; max-width: 620px; }
-
-  /* One continuous blue -> grey -> red gradient. Position along the track
-     IS the reading, so the colour never needs a key. */
-  .slider-track {
+  /* Five discrete positions on a line, not a drag handle -- you pick a
+     point, you don't slide to one. Each stop is a real button, so it's
+     keyboard- and screen-reader-navigable for free. */
+  .lean-selector {
     position: relative;
-    height: 12px;
+    margin: 30px auto 36px;
+    max-width: 660px;
+    padding: 26px 30px 22px;
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    background: #fbfbfc;
+  }
+  .lean-line {
+    position: absolute;
+    left: 60px; right: 60px; top: 44px; height: 6px;
     border-radius: 999px;
     background: linear-gradient(90deg, #1d4ed8 0%, #93c5fd 25%, #d4d7dc 50%, #fca5a5 75%, #b91c1c 100%);
-    cursor: pointer;
-    touch-action: none;
-    outline: none;
   }
-  .slider-track:focus-visible { box-shadow: 0 0 0 3px rgba(29,78,216,0.35); }
-  .slider-stops { position: absolute; inset: 0; }
-  .slider-stops span {
-    position: absolute; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
-    border-radius: 50%; background: rgba(255,255,255,0.75); transition: opacity .2s ease;
+  .lean-stops { position: relative; display: flex; justify-content: space-between; }
+  .lean-stop {
+    position: relative;
+    flex: 1;
+    display: flex; flex-direction: column; align-items: center; gap: 7px;
+    background: none; border: none; padding: 0; cursor: pointer;
+    font-family: var(--font-ui);
   }
-  .slider-stops span[data-stop="1"] { left: 0%; }
-  .slider-stops span[data-stop="2"] { left: 25%; }
-  .slider-stops span[data-stop="3"] { left: 50%; }
-  .slider-stops span[data-stop="4"] { left: 75%; }
-  .slider-stops span[data-stop="5"] { left: 100%; }
-  .slider-stops span.on { opacity: 0; }
-  .slider-handle {
-    position: absolute; top: 50%; left: 50%;
-    width: 26px; height: 26px; margin: -13px 0 0 -13px;
-    border-radius: 50%; background: #d4d7dc;
-    border: 3px solid #fff;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.28);
-    transition: left .18s cubic-bezier(.2,.8,.3,1), background .18s ease, transform .12s ease;
-    pointer-events: none;
+  .lean-dot {
+    width: 20px; height: 20px; border-radius: 50%;
+    background: #fff; border: 3px solid var(--hairline);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    transition: transform .18s cubic-bezier(.2,.9,.3,1.2), border-color .18s ease, background .18s ease;
   }
-  /* While dragging, drop the easing so the handle sits exactly under the
-     cursor instead of lagging behind it. */
-  .slider-track.dragging .slider-handle { transition: background .18s ease; transform: scale(1.15); }
-  .slider-ticks {
-    display: flex; justify-content: space-between;
-    font-family: var(--font-ui); font-size: 11px; font-weight: 500;
-    letter-spacing: 0.04em; text-transform: uppercase; color: var(--meta); margin-top: 12px;
+  .lean-stop:hover .lean-dot { transform: scale(1.18); }
+  .lean-stop[aria-checked="true"] .lean-dot { transform: scale(1.45); box-shadow: 0 2px 10px rgba(0,0,0,0.24); }
+  .lean-stop-num {
+    font-size: 13px; font-weight: 700; color: var(--meta);
+    transition: color .18s ease;
   }
-  .slider-ticks span { flex: 1; text-align: center; }
-  .slider-ticks span:first-child { text-align: left; }
-  .slider-ticks span:last-child { text-align: right; }
-  .slider-current {
-    text-align: center; font-family: var(--font-ui);
-    font-size: 20px; font-weight: 700; letter-spacing: -0.01em; margin-top: 16px;
-    transition: color .2s ease;
+  .lean-stop[aria-checked="true"] .lean-stop-num { color: var(--ink); }
+  .lean-stop-label {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--meta); text-align: center;
+    max-width: 74px; line-height: 1.25;
+    transition: color .18s ease;
+  }
+  .lean-stop[aria-checked="true"] .lean-stop-label { color: var(--ink); }
+  .lean-stop:focus-visible { outline: none; }
+  .lean-stop:focus-visible .lean-dot { box-shadow: 0 0 0 4px rgba(29,78,216,0.32); }
+  @media (max-width: 620px) {
+    .lean-selector { padding: 22px 12px 18px; }
+    .lean-line { left: 34px; right: 34px; }
+    .lean-stop-label { font-size: 9px; max-width: 56px; }
   }
 
   .slider-panel { display: none; }
@@ -890,7 +910,7 @@ export function renderNewspaper({
     var PAGE_NAMES = ${JSON.stringify(["Cover", "Front", "X", "Fun", "Sports", "Slider"].concat(catPages.map((_, i) => "More " + (i + 1))))};
     var currentPage = 0;
 
-    var FLIP_MS = 620;
+    var FLIP_MS = 780;
     var flipping = false;
 
     // Animation preference resolves in this order: an explicit choice the
@@ -988,7 +1008,7 @@ export function renderNewspaper({
     document.addEventListener("keydown", function (e) {
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
       // Don't hijack arrows away from a focused control that uses them.
-      if (e.target.getAttribute && e.target.getAttribute("role") === "slider") return;
+      if (e.target.closest && e.target.closest(".lean-selector")) return;
       if (e.key === "ArrowRight") nextPage();
       if (e.key === "ArrowLeft") prevPage();
     });
@@ -1071,70 +1091,36 @@ export function renderNewspaper({
     var LEAN_HEX = { 1: "#1d4ed8", 2: "#93c5fd", 3: "#d4d7dc", 4: "#fca5a5", 5: "#b91c1c" };
     var currentLean = 3;
 
+    // Discrete selection: pick one of five points. Each stop is a real
+    // button, so clicking, tabbing and screen readers all work without
+    // extra handling; only arrow-key roving is added below.
     function setLean(v) {
       v = Math.min(5, Math.max(1, Math.round(Number(v) || 3)));
       currentLean = v;
       document.querySelectorAll(".slider-panel").forEach(function (p) {
         p.classList.toggle("active", p.dataset.lean === String(v));
       });
-      var label = document.getElementById("leanCurrent");
-      if (label) {
-        label.textContent = LEAN_NAMES[v];
-        label.style.color = v === 3 ? "" : LEAN_HEX[v];
-      }
-      var handle = document.getElementById("leanHandle");
-      var track = document.getElementById("leanTrack");
-      if (handle) {
-        handle.style.left = ((v - 1) / 4) * 100 + "%";
-        handle.style.background = LEAN_HEX[v];
-      }
-      if (track) track.setAttribute("aria-valuenow", String(v));
-      document.querySelectorAll(".slider-stops span").forEach(function (s) {
-        s.classList.toggle("on", Number(s.dataset.stop) === v);
+      document.querySelectorAll(".lean-stop").forEach(function (b) {
+        var on = Number(b.dataset.lean) === v;
+        b.setAttribute("aria-checked", on ? "true" : "false");
+        b.querySelector(".lean-dot").style.borderColor = on ? LEAN_HEX[v] : "";
+        b.querySelector(".lean-dot").style.background = on ? LEAN_HEX[v] : "";
       });
     }
 
-    // Drag handling: the handle tracks the cursor continuously while held
-    // (pointer capture keeps events coming even if the cursor leaves the
-    // track), snapping to the nearest of the five stops. Clicking anywhere
-    // on the track jumps straight there.
     (function () {
-      var track = document.getElementById("leanTrack");
-      if (!track) return;
-      var dragging = false;
-
-      function leanFromClientX(clientX) {
-        var r = track.getBoundingClientRect();
-        var pct = (clientX - r.left) / r.width;
-        pct = Math.min(1, Math.max(0, pct));
-        return Math.round(pct * 4) + 1;
-      }
-
-      track.addEventListener("pointerdown", function (e) {
-        dragging = true;
-        track.classList.add("dragging");
-        track.setPointerCapture(e.pointerId);
-        setLean(leanFromClientX(e.clientX));
-        e.preventDefault();
-      });
-      track.addEventListener("pointermove", function (e) {
-        if (!dragging) return;
-        setLean(leanFromClientX(e.clientX));
-      });
-      function endDrag() {
-        if (!dragging) return;
-        dragging = false;
-        track.classList.remove("dragging");
-      }
-      track.addEventListener("pointerup", endDrag);
-      track.addEventListener("pointercancel", endDrag);
-
-      // stopPropagation matters here: the document-level arrow handler
-      // flips pages, so without it an arrow press on the focused slider
-      // would move the slider AND turn the page.
-      track.addEventListener("keydown", function (e) {
+      var group = document.querySelector(".lean-selector");
+      if (!group) return;
+      // stopPropagation matters: the document-level arrow handler flips
+      // pages, so without it an arrow press here would move the selection
+      // AND turn the page.
+      group.addEventListener("keydown", function (e) {
         if (["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp"].indexOf(e.key) === -1) return;
-        setLean(currentLean + (e.key === "ArrowRight" || e.key === "ArrowUp" ? 1 : -1));
+        var next = currentLean + (e.key === "ArrowRight" || e.key === "ArrowUp" ? 1 : -1);
+        next = Math.min(5, Math.max(1, next));
+        setLean(next);
+        var btn = document.querySelector('.lean-stop[data-lean="' + next + '"]');
+        if (btn) btn.focus();
         e.preventDefault();
         e.stopPropagation();
       });
