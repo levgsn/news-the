@@ -114,6 +114,20 @@ CREATE TABLE IF NOT EXISTS outlet_lean_cache (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Summaries for articles that aren't clusters in our own database --
+-- currently the News Sites page, where stories come straight off an
+-- outlet's RSS feed and have no cluster_id to hang off. Keyed by a hash
+-- of headline + outlet so the same story is only ever summarized once,
+-- and so the audio route can find it again from a short URL-safe id.
+CREATE TABLE IF NOT EXISTS adhoc_summaries (
+  cache_key TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  outlet TEXT,
+  summary_text TEXT NOT NULL,
+  model TEXT NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Keyword -> stock image lookups (Openverse, CC-licensed). Cached so the
 -- same keyword is only searched once ever. Used as the last-resort
 -- thumbnail when an article has no real artwork of its own; see

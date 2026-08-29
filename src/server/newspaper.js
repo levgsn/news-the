@@ -220,14 +220,25 @@ export function renderSiteArticles(site, items, error) {
         : "";
       const snip = a.snippet ? `<div class="site-article-snippet">${escapeHtml(a.snippet)}</div>` : "";
       const when = formatWhen(a.publishedAt) ? `<div class="site-article-meta">${formatWhen(a.publishedAt)}</div>` : "";
-      return `<a class="site-article" href="${escapeHtml(a.url)}" target="_blank" rel="noopener">
-        ${img}
-        <div class="site-article-body">
-          <div class="site-article-title">${escapeHtml(a.title)}</div>
-          ${snip}
-          ${when}
+      // The card is a div rather than an anchor now: it holds buttons, and
+      // nesting interactive controls inside a link is invalid and makes
+      // clicks ambiguous. The link wraps only the headline block.
+      return `<div class="site-article" data-title="${escapeHtml(a.title)}" data-outlet="${escapeHtml(site.name)}">
+        <a class="site-article-link" href="${escapeHtml(a.url)}" target="_blank" rel="noopener">
+          ${img}
+          <div class="site-article-body">
+            <div class="site-article-title">${escapeHtml(a.title)}</div>
+            ${snip}
+            ${when}
+          </div>
+        </a>
+        <div class="site-summary-controls">
+          <button type="button" class="summarize-btn" onclick="loadSiteSummary(this)">Summarize</button>
+          <div class="summary-text"></div>
+          <button type="button" class="play-btn" style="display:none" onclick="playSiteAudio(this)">&#128266; Listen</button>
+          <button type="button" class="close-btn" style="display:none" onclick="closeSiteSummary(this)">Close</button>
         </div>
-      </a>`;
+      </div>`;
     })
     .join("\n");
   return `${head}<div class="site-article-list">${cards}</div>`;
@@ -786,16 +797,15 @@ export function renderNewspaper({
   .site-results { min-height: 90px; }
   .site-article-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
   @media (max-width: 760px) { .site-article-list { grid-template-columns: 1fr; } }
-  .site-article {
-    display: flex; gap: 12px; text-decoration: none; color: inherit;
-    border-bottom: 1px solid var(--hairline); padding-bottom: 14px;
-  }
+  .site-article { border-bottom: 1px solid var(--hairline); padding-bottom: 14px; }
   .site-article-thumb { flex: 0 0 96px; height: 68px; overflow: hidden; border-radius: 6px; background: #eee; }
   .site-article-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .site-article-body { flex: 1; min-width: 0; }
   .site-article-title { font-weight: 700; font-size: 15px; line-height: 1.3; }
   .site-article:hover .site-article-title { text-decoration: underline; }
   .site-article-snippet { font-size: 12.5px; color: var(--meta); margin-top: 4px; line-height: 1.4; }
+  .site-article-link { display: flex; gap: 12px; text-decoration: none; color: inherit; }
+  .site-summary-controls { margin-top: 8px; }
   .site-article-meta { font-family: var(--font-ui); font-size: 11px; color: var(--meta); margin-top: 5px; }
 
   /* ---------- Sports ---------- */
@@ -1042,6 +1052,55 @@ export function renderNewspaper({
       box.classList.add("letter");
       box.style.background = box.dataset.fallbackColor;
       box.textContent = box.dataset.letter || "?";
+    }
+
+    // Summaries for News Sites articles. These aren't clusters in our
+    // database, so the headline is POSTed and the server hands back a key
+    // that the audio route can look the text up by.
+    async function loadSiteSummary(btn) {
+      var card = btn.closest(".site-article");
+      var out = card.querySelector(".summary-text");
+      btn.disabled = true;
+      btn.textContent = "Summarizing...";
+      try {
+        var res = await fetch("/api/site-summary", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: card.dataset.title, outlet: card.dataset.outlet }),
+        });
+        var data = await res.json();
+        out.textContent = data.summary || "No summary available.";
+        if (data.summary) {
+          card.dataset.summaryKey = data.key;
+          btn.style.display = "none";
+          card.querySelector(".play-btn").style.display = "inline-block";
+          card.querySelector(".close-btn").style.display = "inline-block";
+        } else {
+          btn.disabled = false;
+          btn.textContent = "Summarize";
+        }
+      } catch (err) {
+        out.textContent = "Could not load summary.";
+        btn.disabled = false;
+        btn.textContent = "Summarize";
+      }
+    }
+
+    function playSiteAudio(btn) {
+      var card = btn.closest(".site-article");
+      if (!card.dataset.summaryKey) return;
+      playAudio("/api/site-summary/" + card.dataset.summaryKey + "/audio", btn);
+    }
+
+    function closeSiteSummary(btn) {
+      var card = btn.closest(".site-article");
+      card.querySelector(".summary-text").textContent = "";
+      card.querySelector(".play-btn").style.display = "none";
+      btn.style.display = "none";
+      var s = card.querySelector(".summarize-btn");
+      s.style.display = "inline-block";
+      s.disabled = false;
+      s.textContent = "Summarize";
     }
 
     var siteReqToken = 0;

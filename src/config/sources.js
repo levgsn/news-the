@@ -76,8 +76,20 @@ export const SOURCES = [
   { name: "Internet Culture (Google)", url: googleNewsFeed("TikTok OR viral OR internet culture OR social media trend"), category: "social_media_internet_culture", weight: 0.8 },
 
   // --- Fun / Odd News (the newspaper's lighthearted page) ---
+  // Deliberately many outlets rather than one prolific one: a single odd
+  // feed used to fill the whole page with its own house style. Every URL
+  // below was fetched and confirmed to return items before being added.
   { name: "UPI Odd News", url: "https://rss.upi.com/news/odd_news.rss", category: "fun_odd", weight: 1.0 },
   { name: "Odd News (Google)", url: googleNewsFeed("offbeat OR quirky OR bizarre OR heartwarming story"), category: "fun_odd", weight: 0.8 },
+  { name: "AP Oddities (Google)", url: googleNewsFeed("when:7d oddities OR \"weird news\" OR \"strange but true\""), category: "fun_odd", weight: 0.8 },
+  { name: "Sky News Strange", url: "https://feeds.skynews.com/feeds/rss/strange.xml", category: "fun_odd", weight: 0.9 },
+  { name: "Metro Weird", url: "https://metro.co.uk/news/weird/feed/", category: "fun_odd", weight: 0.9 },
+  { name: "Oddity Central", url: "https://www.odditycentral.com/feed", category: "fun_odd", weight: 0.9 },
+  { name: "Neatorama", url: "https://www.neatorama.com/feed/", category: "fun_odd", weight: 0.8 },
+  { name: "Boing Boing", url: "https://boingboing.net/feed", category: "fun_odd", weight: 0.8 },
+  { name: "Mental Floss", url: "https://www.mentalfloss.com/rss.xml", category: "fun_odd", weight: 0.8 },
+  { name: "Atlas Obscura", url: "https://www.atlasobscura.com/feeds/latest", category: "fun_odd", weight: 0.8 },
+  { name: "Live Science", url: "https://www.livescience.com/feeds/all", category: "fun_odd", weight: 0.7 },
 ];
 
 // NOTE: per-state Google News feeds ("Wyoming News", "Wisconsin News", etc.)

@@ -7,7 +7,7 @@ import { getTrendingClusters, getTrendingClustersPriority } from "../ranking/tre
 import { getSliderData } from "../ranking/politicalSlider.js";
 import { getLightheartedClusters } from "../ranking/lighthearted.js";
 import { attachLeans, balanceLeanMix } from "../ranking/outletLean.js";
-import { getOrGenerateClusterSummary } from "../ai/summaries.js";
+import { getOrGenerateClusterSummary, getOrGenerateAdhocSummary, getAdhocSummaryByKey } from "../ai/summaries.js";
 import { getOrSynthesizeAudio } from "../ai/audioCache.js";
 import { generateText } from "../ai/claude.js";
 import {
@@ -134,7 +134,7 @@ app.get("/", async (req, res) => {
       await Promise.all([
         getTrendingClustersPriority({ tiers: HERO_TIERS, limit: HERO_POOL, maxPerSource: 2 }),
         getTodaysSummary(),
-        getLightheartedClusters({ limit: 10 }),
+        getLightheartedClusters({ limit: 48 }),
         getTrendingClusters({ category: "sports", limit: CATEGORY_POOL }),
         getSportsBundle(),
         getSliderData(),
@@ -156,7 +156,10 @@ app.get("/", async (req, res) => {
     // pass scrapes the publisher's own og:image; whatever is still empty
     // falls back to a CC-licensed keyword image, flagged as stock so the
     // UI can label it. Both persist, so a story pays this at most once.
-    const withThumbs = [breaking, ...trending, ...funClusters].filter(Boolean);
+    // Capped at the fun page's first rows: each miss costs a live outbound
+    // lookup, and doing that for all 48 fun stories would stall the first
+    // render. The rest fill in on later loads as those stories rotate up.
+    const withThumbs = [breaking, ...trending, ...funClusters.slice(0, 12)].filter(Boolean);
     await backfillImagesForClusters(withThumbs);
     await backfillKeywordImages(withThumbs);
 
@@ -204,6 +207,35 @@ app.get("/api/site/:id", async (req, res) => {
   } catch (err) {
     console.error("[api/site] error:", err);
     res.status(500).type("html").send(`<p class="empty">Could not load that outlet.</p>`);
+  }
+});
+
+// Summaries for News Sites articles, which come off an outlet's feed and
+// have no cluster_id. POST because a headline is too long for a query
+// string; the returned key is what the audio route uses so the client
+// never has to send the headline twice.
+app.post("/api/site-summary", express.json({ limit: "8kb" }), async (req, res) => {
+  const title = (req.body?.title || "").toString().slice(0, 500).trim();
+  const outlet = (req.body?.outlet || "").toString().slice(0, 120).trim();
+  if (!title) return res.status(400).json({ error: "missing_title" });
+  try {
+    const result = await getOrGenerateAdhocSummary({ title, outlet });
+    res.json(result || { error: "no_summary" });
+  } catch (err) {
+    console.error("[api/site-summary] error:", err);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+app.get("/api/site-summary/:key/audio", async (req, res) => {
+  try {
+    const summary = await getAdhocSummaryByKey(req.params.key);
+    if (!summary) return res.status(404).send("No summary available");
+    const { audio_data, content_type } = await getOrSynthesizeAudio(summary);
+    sendAudio(req, res, audio_data, content_type);
+  } catch (err) {
+    console.error("[api/site-summary/audio] error:", err);
+    res.status(500).send("Could not generate audio");
   }
 });
 

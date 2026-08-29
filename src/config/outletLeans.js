@@ -107,7 +107,18 @@ export const OUTLET_LEANS = {
   "Deadline": 3,
   "Foreign Policy": 3,
   "Law & Crime": 3,
+  // Fun/odd outlets are apolitical -- listed explicitly so they resolve
+  // instantly instead of falling through to AI classification.
   "UPI Odd News": 3,
+  "AP Oddities (Google)": 3,
+  "Sky News Strange": 3,
+  "Metro Weird": 3,
+  "Oddity Central": 3,
+  "Neatorama": 3,
+  "Boing Boing": 3,
+  "Mental Floss": 3,
+  "Atlas Obscura": 3,
+  "Live Science": 3,
   // Google News aggregator feeds pool many outlets under one name, so no
   // single lean is meaningful -- centre is the honest label, not a guess.
   "Crime News (Google)": 3,

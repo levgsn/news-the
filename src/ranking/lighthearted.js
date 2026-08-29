@@ -51,52 +51,73 @@ export async function getLightheartedClusters({ limit = 10 } = {}) {
     if (rows.length > 0) return rows;
   }
 
-  const pool_ = await getTrendingClusters({ limit: 120 });
-  const eligible = pool_.filter((c) => !EXCLUDED_CATEGORIES.has(c.category));
-  const fallback = () => pool_.filter((c) => c.category === "fun_odd").slice(0, limit);
+  // The odd pool MUST be queried on its own rather than filtered out of a
+  // general trending list. trending_score is (distinct outlets covering
+  // the story) decayed over time, and odd stories are almost always
+  // single-outlet -- so they score near the floor and a global top-N is
+  // entirely regular news before you ever reach them. Filtering that list
+  // produced a fun page with zero odd stories on it.
+  const [oddPool, generalPool] = await Promise.all([
+    getTrendingClusters({ category: "fun_odd", limit: 200 }),
+    getTrendingClusters({ limit: 200 }),
+  ]);
 
-  if (eligible.length === 0) return fallback();
+  const regularPool = generalPool.filter(
+    (c) => c.category !== "fun_odd" && !EXCLUDED_CATEGORIES.has(c.category)
+  );
+  const fallback = () => oddPool.slice(0, limit);
 
-  // Ask over the two pools SEPARATELY rather than once over everything.
-  // A single call reliably returns mostly odd-news picks -- those headlines
-  // are the most overtly lighthearted, so they win on merit every time --
-  // and the exact mix varied run to run, which made a post-hoc cap
-  // unreliable. Splitting the request guarantees the page always carries
-  // regular-news stories, whatever the model happens to favour.
-  const oddPool = eligible.filter((c) => c.category === "fun_odd");
-  const regularPool = eligible.filter((c) => c.category !== "fun_odd");
+  if (oddPool.length === 0 && regularPool.length === 0) return [];
 
-  const ODD_SLOTS = Math.min(Math.floor(limit * 0.4), oddPool.length);
-  const REGULAR_SLOTS = limit - ODD_SLOTS;
+  // Odd-news outlets are the intended backbone of this page, so they take
+  // the majority of slots. Regular-news stories keep a reserved share so a
+  // genuinely charming tech or culture piece can still surface alongside.
+  // Per-outlet variety is enforced by MAX_PER_OUTLET below.
 
+  const REGULAR_SLOTS = Math.min(Math.round(limit * 0.25), regularPool.length);
+  const ODD_SLOTS = limit - REGULAR_SLOTS;
+
+  // Claude is asked in batches rather than one huge prompt: a single call
+  // listing hundreds of headlines both truncates and degrades.
+  const BATCH = 60;
   async function pickFrom(candidatePool, want, label) {
     if (candidatePool.length === 0 || want <= 0) return [];
-    try {
-      const lines = candidatePool.map((c) => `${c.id}: ${c.representative_title}`).join("\n");
-      const raw = await generateText({
-        system:
-          "You select lighthearted news for a newspaper's fun page. Pick stories that are genuinely fun, quirky, heartwarming, absurd, or feel-good. NEVER pick anything involving death, injury, crime, disaster, war, illness, layoffs, or human suffering -- even if the headline has a jokey tone. If fewer than the requested number qualify, return fewer. Respond with ONLY a JSON array of the numeric ids, no markdown.",
-        prompt: `Pick up to ${want} lighthearted stories from these headlines:\n${lines}`,
-        maxTokens: 300,
-      });
-      const ids = parseIdArray(raw);
-      if (!ids) return [];
-      const byId = new Map(candidatePool.map((c) => [c.id, c]));
-      return ids.map((id) => byId.get(id)).filter(Boolean);
-    } catch (err) {
-      console.error(`[lighthearted] ${label} classification failed: ${err.message}`);
-      return [];
-    }
+    const batches = [];
+    for (let i = 0; i < candidatePool.length; i += BATCH) batches.push(candidatePool.slice(i, i + BATCH));
+    const perBatch = Math.max(4, Math.ceil(want / batches.length) + 3);
+
+    const results = await Promise.all(
+      batches.map(async (batch) => {
+        try {
+          const lines = batch.map((c) => `${c.id}: ${c.representative_title}`).join("\n");
+          const raw = await generateText({
+            system:
+              "You select lighthearted news for a newspaper's fun page. Pick stories that are genuinely fun, quirky, heartwarming, absurd, or feel-good. NEVER pick anything involving death, injury, crime, disaster, war, illness, layoffs, or human suffering -- even if the headline has a jokey tone. If fewer than the requested number qualify, return fewer. Respond with ONLY a JSON array of the numeric ids, no markdown.",
+            prompt: `Pick up to ${perBatch} lighthearted stories from these headlines:\n${lines}`,
+            maxTokens: 400,
+          });
+          const ids = parseIdArray(raw);
+          if (!ids) return [];
+          const byId = new Map(batch.map((c) => [c.id, c]));
+          return ids.map((id) => byId.get(id)).filter(Boolean);
+        } catch (err) {
+          console.error(`[lighthearted] ${label} batch failed: ${err.message}`);
+          return [];
+        }
+      })
+    );
+    return results.flat();
   }
 
   const [regularPicks, oddPicks] = await Promise.all([
     pickFrom(regularPool, REGULAR_SLOTS + 4, "regular"),
-    pickFrom(oddPool, ODD_SLOTS + 2, "odd"),
+    pickFrom(oddPool, ODD_SLOTS + 8, "odd"),
   ]);
 
-  // Cap any single outlet so one prolific feed can't dominate even within
-  // its own half of the page.
-  const MAX_PER_OUTLET = 3;
+  // The real constraint: no single outlet may dominate. With ten odd
+  // outlets feeding this page, a generous per-outlet cap still leaves
+  // plenty of variety.
+  const MAX_PER_OUTLET = 6;
   const perOutlet = new Map();
   const chosen = [];
 
@@ -107,6 +128,7 @@ export async function getLightheartedClusters({ limit = 10 } = {}) {
       const outlet = c.top_source || "Unknown";
       const used = perOutlet.get(outlet) || 0;
       if (used >= MAX_PER_OUTLET) continue;
+      if (chosen.some((x) => x.id === c.id)) continue;
       perOutlet.set(outlet, used + 1);
       chosen.push(c);
       taken++;
