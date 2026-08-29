@@ -79,6 +79,45 @@ function renderHeadlineList(clusters) {
 }
 
 
+// Audio must be served with HTTP range support. Safari and iOS probe a
+// media URL with `Range: bytes=0-1` before playing and refuse the file
+// outright if the server answers 200-with-everything instead of a 206.
+// Chrome tolerates the sloppy version, which is why this only showed up
+// on some browsers -- the audio was fine, the transport was not.
+function sendAudio(req, res, buffer, contentType) {
+  const total = buffer.length;
+  res.set("Accept-Ranges", "bytes");
+  res.set("Content-Type", contentType || "audio/mpeg");
+
+  const range = req.headers.range;
+  const match = range && /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+  if (!match) {
+    res.set("Content-Length", String(total));
+    return res.send(buffer);
+  }
+
+  let start = match[1] === "" ? null : Number(match[1]);
+  let end = match[2] === "" ? null : Number(match[2]);
+  // "bytes=-500" means the LAST 500 bytes, not from zero.
+  if (start === null) {
+    const len = end === null ? total : Math.min(end, total);
+    start = total - len;
+    end = total - 1;
+  } else if (end === null || end >= total) {
+    end = total - 1;
+  }
+
+  if (start >= total || start > end) {
+    res.status(416).set("Content-Range", `bytes */${total}`);
+    return res.end();
+  }
+
+  res.status(206);
+  res.set("Content-Range", `bytes ${start}-${end}/${total}`);
+  res.set("Content-Length", String(end - start + 1));
+  return res.send(buffer.subarray(start, end + 1));
+}
+
 // --- Routes ---------------------------------------------------------------
 
 app.get("/", async (req, res) => {
@@ -174,7 +213,7 @@ app.get("/api/summary/:clusterId/audio", async (req, res) => {
     const summary = await getOrGenerateClusterSummary(clusterId);
     if (!summary) return res.status(404).send("No summary available");
     const { audio_data, content_type } = await getOrSynthesizeAudio(summary);
-    res.set("Content-Type", content_type).send(audio_data);
+    sendAudio(req, res, audio_data, content_type);
   } catch (err) {
     console.error("[api/summary/audio] error:", err);
     res.status(500).send("Could not generate audio");
@@ -223,7 +262,7 @@ app.get("/api/front-summary/audio", async (req, res) => {
     const summary = await getFrontPageSummary();
     if (!summary) return res.status(404).send("No summary available");
     const { audio_data, content_type } = await getOrSynthesizeAudio(summary);
-    res.set("Content-Type", content_type).send(audio_data);
+    sendAudio(req, res, audio_data, content_type);
   } catch (err) {
     console.error("[api/front-summary/audio] error:", err);
     res.status(500).send("Could not generate audio");
@@ -234,7 +273,7 @@ app.get("/api/daily-summary/audio", async (req, res) => {
   try {
     const audio = await getTodaysSummaryAudio();
     if (!audio) return res.status(404).send("No audio available today");
-    res.set("Content-Type", audio.content_type).send(audio.audio_data);
+    sendAudio(req, res, audio.audio_data, audio.content_type);
   } catch (err) {
     console.error("[api/daily-summary/audio] error:", err);
     res.status(500).send("Could not load audio");
