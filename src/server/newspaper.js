@@ -1047,7 +1047,84 @@ export function renderNewspaper({
         document.getElementById("summary-" + id).textContent = "Could not load summary.";
       }
     }
-    function playSummaryAudio(btn) { new Audio("/api/summary/" + btn.dataset.clusterId + "/audio").play(); }
+    // Shared audio player. One clip at a time, held in a module-level
+    // reference so a playing element can never be garbage-collected
+    // mid-sentence, and so starting a new clip stops the previous one.
+    //
+    // The important part is FEEDBACK: the first click on a summary has to
+    // wait for ElevenLabs to synthesize it, which can take tens of
+    // seconds. Without a loading state the button looks broken, which is
+    // exactly how this read before.
+    var currentAudio = null;
+    var currentAudioBtn = null;
+
+    function resetAudioBtn(btn) {
+      if (!btn) return;
+      btn.disabled = false;
+      btn.textContent = btn.dataset.idleLabel || String.fromCharCode(128266) + " Listen";
+    }
+
+    function stopAudio() {
+      if (currentAudio) {
+        // Clearing src is how you abort an in-flight download, but it also
+        // fires an error event -- flag it so the handler below does not
+        // report a deliberate stop as a failure.
+        currentAudio.stoppingDeliberately = true;
+        currentAudio.pause();
+        currentAudio.src = "";
+        currentAudio = null;
+      }
+      resetAudioBtn(currentAudioBtn);
+      currentAudioBtn = null;
+    }
+
+    function playAudio(url, btn) {
+      if (!btn.dataset.idleLabel) btn.dataset.idleLabel = btn.textContent.trim();
+
+      // Second click on the same button = stop.
+      if (currentAudioBtn === btn && currentAudio && !currentAudio.paused) {
+        stopAudio();
+        return;
+      }
+      stopAudio();
+
+      btn.disabled = true;
+      btn.textContent = "Loading audio...";
+
+      var audio = new Audio(url);
+      currentAudio = audio;
+      currentAudioBtn = btn;
+
+      audio.addEventListener("playing", function () {
+        btn.disabled = false;
+        btn.textContent = String.fromCharCode(9209) + " Stop";
+      });
+      audio.addEventListener("ended", function () {
+        if (currentAudio === audio) stopAudio();
+      });
+      audio.addEventListener("error", function () {
+        if (audio.stoppingDeliberately) return;
+        if (currentAudio === audio) { currentAudio = null; currentAudioBtn = null; }
+        btn.disabled = false;
+        btn.textContent = "Audio unavailable";
+        setTimeout(function () { resetAudioBtn(btn); }, 2600);
+      });
+
+      var p = audio.play();
+      if (p && p.catch) {
+        p.catch(function (err) {
+          // Stopping a clip whose play() is still pending rejects it with
+          // AbortError. That is the user pressing stop, not a failure --
+          // reporting it as one is what made Stop read "Audio unavailable".
+          if (audio.stoppingDeliberately || (err && err.name === "AbortError")) return;
+          if (currentAudio === audio) { currentAudio = null; currentAudioBtn = null; }
+          btn.disabled = false;
+          btn.textContent = err && err.name === "NotAllowedError" ? "Tap again to play" : "Audio unavailable";
+          setTimeout(function () { resetAudioBtn(btn); }, 2600);
+        });
+      }
+    }
+    function playSummaryAudio(btn) { playAudio("/api/summary/" + btn.dataset.clusterId + "/audio", btn); }
     function closeSummary(btn) {
       var id = btn.dataset.clusterId;
       document.getElementById("summary-" + id).textContent = "";
@@ -1077,7 +1154,7 @@ export function renderNewspaper({
         btn.disabled = false; btn.textContent = "Summarize All";
       }
     }
-    function playFrontAudio() { new Audio("/api/front-summary/audio").play(); }
+    function playFrontAudio() { playAudio("/api/front-summary/audio", document.getElementById("frontAudioBtn")); }
     function closeFrontSummary() {
       document.getElementById("frontSummary").textContent = "";
       document.getElementById("frontAudioBtn").style.display = "none";
@@ -1085,7 +1162,7 @@ export function renderNewspaper({
       var b = document.getElementById("summarizeAllBtn");
       b.style.display = "inline-block"; b.disabled = false; b.textContent = "Summarize All";
     }
-    function playDailySummaryAudio() { new Audio("/api/daily-summary/audio").play(); }
+    function playDailySummaryAudio() { playAudio("/api/daily-summary/audio", document.querySelector(".daily-summary-widget .play-btn")); }
 
     var LEAN_NAMES = { 1: "Far Left", 2: "Moderate Left", 3: "Center", 4: "Moderate Right", 5: "Far Right" };
     var LEAN_HEX = { 1: "#1d4ed8", 2: "#93c5fd", 3: "#d4d7dc", 4: "#fca5a5", 5: "#b91c1c" };
