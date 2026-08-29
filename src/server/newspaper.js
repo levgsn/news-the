@@ -177,64 +177,60 @@ function renderFrontPage(breaking, trending, dailySummary) {
 }
 
 // ---------------------------------------------------------------------------
-// Page: Trending on X
+// Page: news sites browser
 // ---------------------------------------------------------------------------
 
-function renderXPage(xData) {
-  if (!xData) {
-    return `<section class="page" data-page="2">
-      ${pageHeader("Trending on X")}
-      <div class="notice">
-        <p><strong>Not connected yet.</strong> X removed free API access in 2023 &mdash; live trends, tweets and replies require a paid tier (Basic, roughly $200/month).</p>
-        <p>This page is fully built and will populate automatically once <code>X_BEARER_TOKEN</code> is set. Nothing else needs to change.</p>
-        <p class="notice-small">On verification: the original blue check was retired platform-wide in 2023. The closest filter the API still offers is the gold (business) and grey (government) badges, which are granted rather than purchased &mdash; that's what the top-comments filter uses.</p>
-      </div>
-    </section>`;
-  }
-
-  const trendsHtml = xData.trends?.length
-    ? `<div class="x-tags">${xData.trends
-        .map(
-          (t) =>
-            `<span class="x-tag">${escapeHtml(t.name)}${t.volume ? `<em>${Number(t.volume).toLocaleString()} posts</em>` : ""}</span>`
-        )
-        .join("")}</div>`
-    : `<p class="empty">No trends returned.</p>`;
-
-  const tweetsHtml = xData.tweets?.length
-    ? xData.tweets
-        .map((tw) => {
-          const badge = tw.author?.verifiedType
-            ? `<span class="x-badge x-badge-${escapeHtml(tw.author.verifiedType)}">${escapeHtml(tw.author.verifiedType)}</span>`
-            : "";
-          const replies = (tw.replies || []).length
-            ? `<div class="x-replies"><div class="x-replies-label">Top verified replies</div>${tw.replies
-                .map(
-                  (r) => `<div class="x-reply">
-                    <div class="x-reply-author">${escapeHtml(r.author.name)} <span>@${escapeHtml(r.author.username)}</span> <span class="x-badge x-badge-${escapeHtml(r.author.verifiedType)}">${escapeHtml(r.author.verifiedType)}</span></div>
-                    <div class="x-reply-text">${escapeHtml(r.text)}</div>
-                  </div>`
-                )
-                .join("")}</div>`
-            : `<div class="x-replies"><div class="x-replies-label">No verified replies found.</div></div>`;
-          return `<div class="x-tweet">
-            <div class="x-tweet-author">${escapeHtml(tw.author?.name || "Unknown")} <span>@${escapeHtml(tw.author?.username || "")}</span> ${badge}</div>
-            <div class="x-tweet-text">${escapeHtml(tw.text)}</div>
-            <div class="x-tweet-meta">${Number(tw.likes).toLocaleString()} likes${formatWhen(tw.createdAt) ? ` &middot; ${formatWhen(tw.createdAt)}` : ""}</div>
-            ${replies}
-          </div>`;
-        })
-        .join("\n")
-    : `<p class="empty">No tweets returned.</p>`;
+// Grid of outlets; picking one loads that outlet's current stories into
+// the panel below. Feeds are fetched on click rather than up front --
+// pulling ~60 feeds on every page load would make the whole paper crawl,
+// and a reader opens one or two.
+function renderSitesPage(sites) {
+  const cards = sites
+    .map(
+      (s) => `<button type="button" class="site-card" data-site="${escapeHtml(s.id)}" onclick="loadSite(this)" title="${escapeHtml(s.name)}">
+        <span class="site-ico" data-fallback-color="${placeholderColor(s.name)}" data-letter="${escapeHtml(s.name.charAt(0))}">
+          <img src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(s.domain)}&amp;sz=64" alt="" loading="lazy" onerror="handleIconError(this)" />
+        </span>
+        <span class="site-name">${escapeHtml(s.name)}</span>
+      </button>`
+    )
+    .join("\n");
 
   return `<section class="page" data-page="2">
-    ${pageHeader("Trending on X")}
-    ${xData.error ? `<div class="notice"><strong>X API error:</strong> ${escapeHtml(xData.error)}</div>` : ""}
-    <h3 class="section-rule">Trending Hashtags &amp; Topics</h3>
-    ${trendsHtml}
-    <h3 class="section-rule">Most Trending Posts</h3>
-    ${tweetsHtml}
+    ${pageHeader("News Sites")}
+    <p class="page-kicker">${sites.length} outlets. Pick one to read what they're running right now.</p>
+    <div class="site-grid">${cards}</div>
+    <div class="site-results" id="siteResults">
+      <p class="empty">Choose an outlet above to load its latest stories.</p>
+    </div>
   </section>`;
+}
+
+// Rendered server-side and swapped into #siteResults, so the article
+// markup matches the rest of the paper without duplicating a template
+// in client JS.
+export function renderSiteArticles(site, items, error) {
+  const head = `<h3 class="section-rule">${escapeHtml(site.name)}</h3>`;
+  if (error) return `${head}<p class="empty">${escapeHtml(error)}</p>`;
+  if (!items.length) return `${head}<p class="empty">No stories returned right now.</p>`;
+  const cards = items
+    .map((a) => {
+      const img = a.image
+        ? `<div class="site-article-thumb"><img src="${escapeHtml(a.image)}" alt="" loading="lazy" onerror="this.parentElement.remove()" /></div>`
+        : "";
+      const snip = a.snippet ? `<div class="site-article-snippet">${escapeHtml(a.snippet)}</div>` : "";
+      const when = formatWhen(a.publishedAt) ? `<div class="site-article-meta">${formatWhen(a.publishedAt)}</div>` : "";
+      return `<a class="site-article" href="${escapeHtml(a.url)}" target="_blank" rel="noopener">
+        ${img}
+        <div class="site-article-body">
+          <div class="site-article-title">${escapeHtml(a.title)}</div>
+          ${snip}
+          ${when}
+        </div>
+      </a>`;
+    })
+    .join("\n");
+  return `${head}<div class="site-article-list">${cards}</div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +395,7 @@ export function renderNewspaper({
   funClusters,
   sportsClusters,
   sports,
-  xData,
+  sites,
   slider,
   dailySummary,
 }) {
@@ -414,7 +410,7 @@ export function renderNewspaper({
   const pages = [
     renderCover(storyCount),
     renderFrontPage(breaking, trending, dailySummary),
-    renderXPage(xData),
+    renderSitesPage(sites),
     renderFunPage(funClusters),
     renderSportsPage(sports, sportsClusters),
     renderSliderPage(slider),
@@ -757,27 +753,50 @@ export function renderNewspaper({
   .front-actions { margin-bottom: 12px; }
   .front-summary { font-size: 14px; line-height: 1.6; white-space: pre-wrap; margin-bottom: 16px; }
 
-  /* ---------- X page ---------- */
-  .notice { border: 1px solid #bbb; background: #fffdf7; padding: 16px 18px; font-size: 14px; line-height: 1.6; }
-  .notice p { margin: 0 0 10px; }
-  .notice-small { font-size: 12px; color: var(--meta); }
-  .x-tags { display: flex; flex-wrap: wrap; gap: 8px; }
-  .x-tag { border: 1px solid #999; padding: 5px 10px; font-size: 13px; font-family: var(--font-header); }
-  .x-tag em { display: block; font-size: 10px; color: var(--meta); font-style: normal; }
-  .x-tweet { border-top: 1px solid #ddd; padding: 14px 0; }
-  .x-tweet-author { font-weight: 700; font-size: 14px; }
-  .x-tweet-author span { font-weight: 400; color: var(--meta); }
-  .x-tweet-text { margin: 6px 0; font-size: 15px; }
-  .x-tweet-meta { font-size: 11px; color: var(--meta); }
-  .x-badge { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; border: 1px solid #999; padding: 1px 5px; }
-  .x-badge-business { background: #fff3cd; }
-  .x-badge-government { background: #e2e3e5; }
-  .x-replies { margin-top: 10px; padding-left: 14px; border-left: 2px solid #ddd; }
-  .x-replies-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--meta); margin-bottom: 6px; }
-  .x-reply { margin-bottom: 8px; }
-  .x-reply-author { font-size: 12px; font-weight: 700; }
-  .x-reply-author span { font-weight: 400; color: var(--meta); }
-  .x-reply-text { font-size: 13px; }
+  /* ---------- News sites page ---------- */
+  .site-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(122px, 1fr));
+    gap: 10px;
+    margin-bottom: 30px;
+  }
+  .site-card {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 14px 8px;
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    background: #fff;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+  }
+  .site-card:hover { border-color: var(--ink); box-shadow: 0 3px 10px rgba(0,0,0,0.09); transform: translateY(-2px); }
+  .site-card.selected { border-color: var(--ink); border-width: 2px; box-shadow: 0 3px 12px rgba(0,0,0,0.14); }
+  .site-ico {
+    width: 34px; height: 34px; border-radius: 8px; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    background: #f2f2f4;
+  }
+  .site-ico img { width: 26px; height: 26px; object-fit: contain; display: block; }
+  .site-ico.letter { font-family: var(--font-ui); font-weight: 700; font-size: 15px; color: #33363c; }
+  .site-name {
+    font-size: 11px; font-weight: 600; line-height: 1.25; text-align: center;
+    color: var(--ink); letter-spacing: -0.005em;
+  }
+  .site-results { min-height: 90px; }
+  .site-article-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  @media (max-width: 760px) { .site-article-list { grid-template-columns: 1fr; } }
+  .site-article {
+    display: flex; gap: 12px; text-decoration: none; color: inherit;
+    border-bottom: 1px solid var(--hairline); padding-bottom: 14px;
+  }
+  .site-article-thumb { flex: 0 0 96px; height: 68px; overflow: hidden; border-radius: 6px; background: #eee; }
+  .site-article-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .site-article-body { flex: 1; min-width: 0; }
+  .site-article-title { font-weight: 700; font-size: 15px; line-height: 1.3; }
+  .site-article:hover .site-article-title { text-decoration: underline; }
+  .site-article-snippet { font-size: 12.5px; color: var(--meta); margin-top: 4px; line-height: 1.4; }
+  .site-article-meta { font-family: var(--font-ui); font-size: 11px; color: var(--meta); margin-top: 5px; }
 
   /* ---------- Sports ---------- */
   .scoreboard { border-top: 1px solid #ddd; }
@@ -907,7 +926,7 @@ export function renderNewspaper({
 
   <script>
     var TOTAL_PAGES = ${totalPages};
-    var PAGE_NAMES = ${JSON.stringify(["Cover", "Front", "X", "Fun", "Sports", "Slider"].concat(catPages.map((_, i) => "More " + (i + 1))))};
+    var PAGE_NAMES = ${JSON.stringify(["Cover", "Front", "Sites", "Fun", "Sports", "Slider"].concat(catPages.map((_, i) => "More " + (i + 1))))};
     var currentPage = 0;
 
     var FLIP_MS = 780;
@@ -1016,6 +1035,37 @@ export function renderNewspaper({
     // Some outlet CDNs (Variety, Deadline) hotlink-block cross-site <img>
     // requests even though the URL is valid. Swap in the same placeholder
     // used when there was never an image, rather than a broken icon.
+    // Favicons come from a third party and some outlets simply don't have
+    // one, so fall back to a coloured initial rather than a broken image.
+    function handleIconError(img) {
+      var box = img.parentElement;
+      box.classList.add("letter");
+      box.style.background = box.dataset.fallbackColor;
+      box.textContent = box.dataset.letter || "?";
+    }
+
+    var siteReqToken = 0;
+    async function loadSite(btn) {
+      var id = btn.dataset.site;
+      var out = document.getElementById("siteResults");
+      document.querySelectorAll(".site-card").forEach(function (c) {
+        c.classList.toggle("selected", c === btn);
+      });
+      // Clicking a second outlet while the first is still loading must not
+      // let the slower response overwrite the newer one.
+      var token = ++siteReqToken;
+      out.innerHTML = '<p class="empty">Loading stories...</p>';
+      try {
+        var res = await fetch("/api/site/" + encodeURIComponent(id));
+        var html = await res.text();
+        if (token !== siteReqToken) return;
+        out.innerHTML = html;
+      } catch (err) {
+        if (token !== siteReqToken) return;
+        out.innerHTML = '<p class="empty">Could not load that outlet.</p>';
+      }
+    }
+
     function handleImgError(img) {
       var box = img.parentElement;
       var div = document.createElement("div");

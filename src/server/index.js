@@ -20,9 +20,10 @@ import {
 import { backfillImagesForClusters } from "../ingestion/backfillImages.js";
 import { backfillKeywordImages } from "../ingestion/keywordImage.js";
 import { getSportsBundle } from "../ingestion/sports.js";
-import { getXBundle } from "../ingestion/xTrends.js";
+import { getSiteArticles } from "../ingestion/siteFeed.js";
+import { NEWS_SITES } from "../config/newsSites.js";
 import { CATEGORIES } from "../config/categories.js";
-import { renderNewspaper, escapeHtml, formatWhen } from "./newspaper.js";
+import { renderNewspaper, renderSiteArticles, escapeHtml, formatWhen } from "./newspaper.js";
 
 dotenv.config();
 
@@ -129,14 +130,13 @@ app.get("/", async (req, res) => {
     const HERO_POOL = 40;
     const CATEGORY_POOL = 30;
 
-    const [heroPool, dailySummary, funClusters, sportsPool, sports, xData, slider, ...categoryPools] =
+    const [heroPool, dailySummary, funClusters, sportsPool, sports, slider, ...categoryPools] =
       await Promise.all([
         getTrendingClustersPriority({ tiers: HERO_TIERS, limit: HERO_POOL, maxPerSource: 2 }),
         getTodaysSummary(),
         getLightheartedClusters({ limit: 10 }),
         getTrendingClusters({ category: "sports", limit: CATEGORY_POOL }),
         getSportsBundle(),
-        getXBundle(),
         getSliderData(),
         ...CATEGORIES.map((cat) => getTrendingClusters({ category: cat.slug, limit: CATEGORY_POOL })),
       ]);
@@ -170,7 +170,7 @@ app.get("/", async (req, res) => {
     res.send(
       renderNewspaper({
         breaking, trending, categorySections, funClusters, sportsClusters,
-        sports, xData, slider, dailySummary,
+        sports, sites: NEWS_SITES, slider, dailySummary,
       })
     );
   } catch (err) {
@@ -191,6 +191,19 @@ app.get("/section/:category", async (req, res) => {
   } catch (err) {
     console.error("[/section] error:", err);
     res.status(500).send("Something broke. Check server logs.");
+  }
+});
+
+// Returns rendered HTML rather than JSON so the article markup lives in
+// one place (newspaper.js) instead of being duplicated in client JS.
+app.get("/api/site/:id", async (req, res) => {
+  try {
+    const result = await getSiteArticles(req.params.id);
+    if (!result) return res.status(404).type("html").send(`<p class="empty">Unknown outlet.</p>`);
+    res.type("html").send(renderSiteArticles(result.site, result.items, result.error));
+  } catch (err) {
+    console.error("[api/site] error:", err);
+    res.status(500).type("html").send(`<p class="empty">Could not load that outlet.</p>`);
   }
 });
 
