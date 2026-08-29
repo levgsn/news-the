@@ -319,7 +319,13 @@ app.post("/admin/summary/generate", requireAdminKey, async (req, res) => {
 
 app.post("/admin/summary/generate-audio", requireAdminKey, async (req, res) => {
   try {
-    await generateAiDailySummaryAudio();
+    const audio = await generateAiDailySummaryAudio();
+    // There's nothing to narrate until today's text exists. Without this
+    // the button just redirected and appeared to do nothing.
+    if (!audio) {
+      const msg = "No summary text for today yet — generate or write the text first, then create its audio.";
+      return res.redirect(`/admin/summary?key=${encodeURIComponent(req.query.key)}&error=${encodeURIComponent(msg)}`);
+    }
     res.redirect(`/admin/summary?key=${encodeURIComponent(req.query.key)}`);
   } catch (err) {
     console.error("[admin/summary/generate-audio] error:", err);
