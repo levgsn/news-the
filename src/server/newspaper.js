@@ -194,7 +194,7 @@ function renderReelsPage(reels) {
   }
 
   const cards = reels
-    .map((c, i) => {
+    .map((c) => {
       const when = formatWhen(c.top_published_at);
       const count = Number(c.source_count) || 1;
       const bg = c.top_image
@@ -203,7 +203,6 @@ function renderReelsPage(reels) {
       return `<article class="reel" data-cluster-id="${c.id}" style="--reel-tint:${placeholderColor(c.top_source || "")}">
         ${bg}
         <div class="reel-shade"></div>
-        <div class="reel-rank">${i + 1} <span>/ ${reels.length}</span></div>
         <div class="reel-body">
           <div class="reel-tags">
             ${leanChip(c.lean)}
@@ -223,10 +222,26 @@ function renderReelsPage(reels) {
     })
     .join("\n");
 
+  // The feed ends on a card of its own rather than just stopping, so
+  // reaching the last story reads as finishing rather than as the page
+  // having broken. It snaps like any other reel.
+  const end = `<article class="reel reel-end">
+      <div class="reel-end-inner">
+        <div class="reel-end-check">&#10003;</div>
+        <h2>You're all caught up</h2>
+        <p>That's every story we have today &mdash; ${reels.length} of them.</p>
+        <div class="reel-actions reel-end-actions">
+          <button type="button" class="reel-btn reel-listen" onclick="reelToTop()">Back to the top</button>
+          <button type="button" class="reel-btn" onclick="goToPage(1)">Front page</button>
+        </div>
+      </div>
+    </article>`;
+
   return `<section class="page page-reels">
     ${pageHeader("The Reel")}
-    <p class="page-kicker reel-kicker">Today's stories, most relevant first. Scroll or use the arrow keys.</p>
-    <div class="reel-viewport" id="reelViewport">${cards}</div>
+    <p class="page-kicker reel-kicker">Every story from today, shuffled across sections. Scroll or use the arrow keys.</p>
+    <div class="reel-viewport" id="reelViewport">${cards}
+${end}</div>
   </section>`;
 }
 
@@ -868,12 +883,28 @@ export function renderNewspaper({
     position: absolute; inset: 0;
     background: linear-gradient(180deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.35) 45%, rgba(0,0,0,0.88) 100%);
   }
-  .reel-rank {
-    position: absolute; top: 16px; right: 18px;
-    font-family: var(--font-ui); font-size: 13px; font-weight: 700;
-    color: #fff; opacity: .85; letter-spacing: .02em;
+  /* Closing card. Centred and unillustrated so it reads as the end of
+     the feed rather than as one more story. */
+  .reel-end {
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; background: #14171c; padding: 24px;
   }
-  .reel-rank span { font-weight: 400; opacity: .7; }
+  .reel-end-inner { max-width: 32ch; }
+  .reel-end-check {
+    width: 54px; height: 54px; margin: 0 auto 18px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%; border: 2px solid rgba(255,255,255,0.45);
+    font-size: 26px; color: #fff;
+  }
+  .reel-end h2 {
+    font-family: var(--font-display); font-size: clamp(26px, 3vw, 38px);
+    color: #fff; margin: 0 0 10px; line-height: 1.15;
+  }
+  .reel-end p {
+    font-family: var(--font-ui); font-size: 15px; line-height: 1.5;
+    color: rgba(255,255,255,0.72); margin: 0;
+  }
+  .reel-end-actions { justify-content: center; }
   .reel-body { position: relative; padding: 26px 28px 30px; width: 100%; }
   @media (max-width: 700px) { .reel-body { padding: 20px 18px 24px; } }
   .reel-tags { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
@@ -1234,6 +1265,13 @@ export function renderNewspaper({
       btn.disabled = false;
     }
 
+    // Called from the "all caught up" card at the end of the feed.
+    function reelToTop() {
+      var vp = document.getElementById("reelViewport");
+      if (!vp) return;
+      stopAudio();
+      vp.scrollTo({ top: 0, behavior: animationsEnabled() ? "smooth" : "auto" });
+    }
     // Which reel is on screen is tracked with an IntersectionObserver
     // rather than by rounding scrollTop: the container scroll event is
     // unreliable for programmatic scrolls, and the observer reports the

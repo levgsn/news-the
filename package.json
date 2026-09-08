@@ -11,6 +11,7 @@
     "dev": "node --watch src/server/index.js"
   },
   "dependencies": {
+    "compression": "^1.8.1",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "multer": "^2.2.0",

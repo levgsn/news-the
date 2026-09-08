@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import multer from "multer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,7 @@ import { getTrendingClusters, getTrendingClustersPriority } from "../ranking/tre
 import { getSliderData } from "../ranking/politicalSlider.js";
 import { getLightheartedClusters } from "../ranking/lighthearted.js";
 import { attachLeans, balanceLeanMix } from "../ranking/outletLean.js";
+import { buildReelFeed } from "../ranking/reelFeed.js";
 import { getOrGenerateClusterSummary, getOrGenerateAdhocSummary, getAdhocSummaryByKey } from "../ai/summaries.js";
 import { getOrSynthesizeAudio } from "../ai/audioCache.js";
 import { generateText } from "../ai/claude.js";
@@ -28,6 +30,11 @@ import { renderNewspaper, renderSiteArticles, escapeHtml, formatWhen } from "./n
 dotenv.config();
 
 const app = express();
+// The Reel prints every story of the day on one page, which pushed the
+// document past 700KB. It is almost all repeated markup, so it gzips to
+// roughly a tenth of that -- worth a middleware to avoid making the feed
+// expensive to open on a phone.
+app.use(compression());
 app.use(express.urlencoded({ extended: false }));
 // Static assets. Long cache: contents are stable.
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "public");
@@ -152,19 +159,25 @@ app.get("/", async (req, res) => {
     const trending = heroBalanced.slice(1, 11);
     const sportsClusters = balanceLeanMix(sportsPool, 10);
 
+    // The Reel takes every story the paper has today -- the hero pool,
+    // both dedicated pages and all the category spreads -- interleaved so
+    // consecutive cards come from different sections. buildReelFeed
+    // dedupes, so a story that appears on two pages still shows up once.
+    const reels = buildReelFeed([
+      { key: "top", clusters: heroPool },
+      { key: "sports", clusters: sportsPool },
+      { key: "fun", clusters: funClusters },
+      ...CATEGORIES.map((cat, i) => ({ key: cat.slug, clusters: categoryPools[i] })),
+    ]);
+
     // Every story that renders a thumbnail box gets something in it. First
     // pass scrapes the publisher's own og:image; whatever is still empty
     // falls back to a CC-licensed keyword image, flagged as stock so the
     // UI can label it. Both persist, so a story pays this at most once.
-    // The Reel: the day's stories ranked most relevant first. Built from
-    // the same balanced hero pool the front page uses, so the ordering
-    // agrees with the rest of the paper and the left/right split carries
-    // through rather than the feed skewing one way.
-    const reels = balanceLeanMix(heroPool, 30);
-
-    // Capped at what the reader sees first: each miss costs a live
-    // outbound lookup, and doing that for every story would stall the
-    // first render. The rest fill in on later loads as stories rotate up.
+    //
+    // Capped at what the reader reaches first: each miss costs a live
+    // outbound lookup, and doing that for a feed this long would stall
+    // the render. The rest fill in on later loads as stories rotate up.
     const withThumbs = [breaking, ...trending, ...reels.slice(0, 14), ...funClusters.slice(0, 12)].filter(Boolean);
     await backfillImagesForClusters(withThumbs);
     await backfillKeywordImages(withThumbs);
