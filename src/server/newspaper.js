@@ -114,7 +114,7 @@ function headlineRow(c) {
 // ---------------------------------------------------------------------------
 
 function renderCover(storyCount) {
-  return `<section class="page page-cover" data-page="0">
+  return `<section class="page page-cover">
     <div class="cover-inner">
       <div class="cover-rule"></div>
       <h1 class="cover-masthead">DirectioNews</h1>
@@ -161,7 +161,7 @@ function renderFrontPage(breaking, trending, dailySummary) {
     ? trending.map((c) => trendingCard(c)).join("\n")
     : `<p class="empty">No trending stories yet &mdash; run <code>npm run ingest</code>.</p>`;
 
-  return `<section class="page" data-page="1">
+  return `<section class="page">
     ${pageHeader("The Front Page")}
     ${summaryDropdown}
     <div class="front-actions">
@@ -173,6 +173,60 @@ function renderFrontPage(breaking, trending, dailySummary) {
     ${breakingHtml}
     <h3 class="section-rule">Today's Top 10</h3>
     <div class="tr-grid">${cards}</div>
+  </section>`;
+}
+
+// ---------------------------------------------------------------------------
+// Page: Reel (vertical swipe feed of the day's stories)
+// ---------------------------------------------------------------------------
+
+// A full-bleed vertical feed, ordered most relevant first. Each card is
+// one story: image, headline, outlet, lean, and a Listen button that
+// speaks the AI summary. The audio route generates the summary itself if
+// it doesn't exist yet, so Listen is a single press rather than
+// summarize-then-play.
+function renderReelsPage(reels) {
+  if (!reels.length) {
+    return `<section class="page page-reels">
+      ${pageHeader("The Reel")}
+      <p class="empty">No stories to scroll yet.</p>
+    </section>`;
+  }
+
+  const cards = reels
+    .map((c, i) => {
+      const when = formatWhen(c.top_published_at);
+      const count = Number(c.source_count) || 1;
+      const bg = c.top_image
+        ? `<img class="reel-bg" src="${escapeHtml(c.top_image)}" alt="" loading="lazy" onerror="this.remove()" />`
+        : "";
+      return `<article class="reel" data-cluster-id="${c.id}" style="--reel-tint:${placeholderColor(c.top_source || "")}">
+        ${bg}
+        <div class="reel-shade"></div>
+        <div class="reel-rank">${i + 1} <span>/ ${reels.length}</span></div>
+        <div class="reel-body">
+          <div class="reel-tags">
+            ${leanChip(c.lean)}
+            <span class="reel-outlet">${escapeHtml(c.top_source || "")}</span>
+            ${count > 1 ? `<span class="reel-sources">${count} outlets</span>` : ""}
+          </div>
+          <h2 class="reel-title">${escapeHtml(c.representative_title || "")}</h2>
+          ${when ? `<div class="reel-when">${when}</div>` : ""}
+          <div class="reel-summary" id="reel-summary-${c.id}"></div>
+          <div class="reel-actions">
+            <button type="button" class="reel-btn reel-listen" data-cluster-id="${c.id}" onclick="playReelAudio(this)">&#128266; Listen</button>
+            <button type="button" class="reel-btn" data-cluster-id="${c.id}" onclick="toggleReelSummary(this)">Read summary</button>
+            <a class="reel-btn reel-open" href="${escapeHtml(c.top_url || "#")}" target="_blank" rel="noopener">Open article</a>
+          </div>
+        </div>
+      </article>`;
+    })
+    .join("\n");
+
+  return `<section class="page page-reels">
+    ${pageHeader("The Reel")}
+    <p class="page-kicker reel-kicker">Today's stories, most relevant first. Scroll or use the arrow keys.</p>
+    <div class="reel-viewport" id="reelViewport">${cards}</div>
   </section>`;
 }
 
@@ -196,7 +250,7 @@ function renderSitesPage(sites) {
     )
     .join("\n");
 
-  return `<section class="page" data-page="2">
+  return `<section class="page">
     ${pageHeader("News Sites")}
     <p class="page-kicker">${sites.length} outlets. Pick one to read what they're running right now.</p>
     <div class="site-grid">${cards}</div>
@@ -255,7 +309,7 @@ function renderFunPage(funClusters) {
     ? `<div class="tr-grid">${funClusters.map((c) => trendingCard(c, false)).join("\n")}</div>`
     : `<p class="empty">No odd news yet &mdash; the fun/odd feeds populate on the next ingest run.</p>`;
 
-  return `<section class="page" data-page="3">
+  return `<section class="page">
     ${pageHeader("Fun &amp; Odd")}
     <p class="page-kicker">The lighter side of the news cycle.</p>
     ${body}
@@ -290,7 +344,7 @@ function renderSportsPage(sports, sportsClusters) {
     ? sportsClusters.map(headlineRow).join("\n")
     : `<p class="empty">No sports headlines yet.</p>`;
 
-  return `<section class="page" data-page="4">
+  return `<section class="page">
     ${pageHeader("Sports")}
     <h3 class="section-rule">Yesterday's Final Scores</h3>
     <div class="scoreboard">${finals}</div>
@@ -307,7 +361,7 @@ function renderSportsPage(sports, sportsClusters) {
 
 function renderSliderPage(slider) {
   if (!slider) {
-    return `<section class="page" data-page="5">
+    return `<section class="page">
       ${pageHeader("The Political Slider")}
       <p class="empty">No event loaded yet &mdash; the slider populates on the next ingest run.</p>
     </section>`;
@@ -333,7 +387,7 @@ function renderSliderPage(slider) {
     })
     .join("\n");
 
-  return `<section class="page" data-page="5">
+  return `<section class="page">
     ${pageHeader("The Political Slider")}
     <p class="page-kicker">One story, five vantage points. Slide to see how coverage shifts across the spectrum.</p>
     <div class="slider-event">${escapeHtml(slider.headline)}</div>
@@ -363,14 +417,13 @@ function renderSliderPage(slider) {
 // Pages: remaining trending, by category
 // ---------------------------------------------------------------------------
 
-function renderCategoryPages(categorySections, startPage) {
+function renderCategoryPages(categorySections) {
   // Two categories per page keeps each spread readable rather than one
   // endless scroll of every section.
   const pages = [];
   const perPage = 2;
   for (let i = 0; i < categorySections.length; i += perPage) {
     const group = categorySections.slice(i, i + perPage);
-    const pageNo = startPage + pages.length;
     const body = group
       .map(
         ({ label, clusters }) => `<div class="cat-block">
@@ -379,7 +432,7 @@ function renderCategoryPages(categorySections, startPage) {
         </div>`
       )
       .join("\n");
-    pages.push(`<section class="page" data-page="${pageNo}">
+    pages.push(`<section class="page">
       ${pageHeader("More Trending")}
       <div class="cat-grid">${body}</div>
     </section>`);
@@ -402,6 +455,7 @@ function pageHeader(title) {
 export function renderNewspaper({
   breaking,
   trending,
+  reels,
   categorySections,
   funClusters,
   sportsClusters,
@@ -417,16 +471,20 @@ export function renderNewspaper({
     sportsClusters.length +
     categorySections.reduce((n, s) => n + s.clusters.length, 0);
 
-  const catPages = renderCategoryPages(categorySections, 6);
+  const catPages = renderCategoryPages(categorySections);
+  // Page order lives HERE and nowhere else. Indices are stamped on after
+  // the fact rather than hardcoded inside each renderer, so inserting or
+  // reordering a page can't leave two sections claiming the same number.
   const pages = [
     renderCover(storyCount),
     renderFrontPage(breaking, trending, dailySummary),
+    renderReelsPage(reels),
     renderSitesPage(sites),
     renderFunPage(funClusters),
     renderSportsPage(sports, sportsClusters),
     renderSliderPage(slider),
     ...catPages,
-  ];
+  ].map((html, i) => html.replace('<section class="page', `<section data-page="${i}" class="page`));
   const totalPages = pages.length;
 
   return `<!DOCTYPE html>
@@ -764,6 +822,100 @@ export function renderNewspaper({
   .front-actions { margin-bottom: 12px; }
   .front-summary { font-size: 14px; line-height: 1.6; white-space: pre-wrap; margin-bottom: 16px; }
 
+  /* ---------- The Reel (vertical swipe feed) ---------- */
+  /* The page keeps its masthead, and the feed below it is its own
+     scroll container with snap points -- so a swipe lands on exactly one
+     story, and the paper's page-turn nav is left untouched. */
+  /* The feed fills whatever the header and nav bar leave behind. This
+     was a fixed height minus a guessed offset, which broke the moment the
+     header wrapped to two lines on a phone and pushed the last button
+     under the nav. A flex column needs no guess. Note the bottom padding
+     is deliberately NOT reduced here -- .page reserves 90px for the fixed
+     nav, and trimming it is what let the card slide underneath. */
+  .page-reels.active { display: flex; flex-direction: column; box-sizing: border-box; height: 100vh; }
+  @supports (height: 100dvh) { .page-reels.active { height: 100dvh; } }
+  .reel-kicker { margin-bottom: 12px; flex: none; }
+  .reel-viewport {
+    flex: 1 1 auto;
+    min-height: 260px;
+    overflow-y: auto;
+    scroll-snap-type: y mandatory;
+    border-radius: 14px;
+    border: 1px solid var(--hairline);
+    background: #0d0f12;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .reel-viewport::-webkit-scrollbar { display: none; }
+  .reel {
+    position: relative;
+    height: 100%;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    display: flex;
+    align-items: flex-end;
+    overflow: hidden;
+    background: var(--reel-tint, #1a1d21);
+  }
+  .reel-bg {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+  }
+  /* Headlines sit on top of photography, so they need a guaranteed dark
+     ground rather than relying on whatever the image happens to be. */
+  .reel-shade {
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.35) 45%, rgba(0,0,0,0.88) 100%);
+  }
+  .reel-rank {
+    position: absolute; top: 16px; right: 18px;
+    font-family: var(--font-ui); font-size: 13px; font-weight: 700;
+    color: #fff; opacity: .85; letter-spacing: .02em;
+  }
+  .reel-rank span { font-weight: 400; opacity: .7; }
+  .reel-body { position: relative; padding: 26px 28px 30px; width: 100%; }
+  @media (max-width: 700px) { .reel-body { padding: 20px 18px 24px; } }
+  .reel-tags { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .reel-outlet {
+    font-family: var(--font-ui); font-size: 12px; font-weight: 600;
+    color: #fff; background: rgba(255,255,255,0.18); padding: 3px 9px; border-radius: 999px;
+  }
+  .reel-sources {
+    font-family: var(--font-ui); font-size: 11px; color: rgba(255,255,255,0.75);
+  }
+  .reel-title {
+    font-family: var(--font-display);
+    font-size: clamp(24px, 3.4vw, 40px);
+    line-height: 1.14;
+    color: #fff;
+    margin: 0 0 8px;
+    max-width: 22ch;
+    text-shadow: 0 2px 18px rgba(0,0,0,0.5);
+  }
+  .reel-when { font-family: var(--font-ui); font-size: 12px; color: rgba(255,255,255,0.72); }
+  .reel-summary {
+    color: rgba(255,255,255,0.94);
+    font-size: 15px; line-height: 1.5;
+    margin: 12px 0 0;
+    max-width: 62ch;
+    max-height: 34vh; overflow-y: auto;
+  }
+  .reel-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  .reel-btn {
+    font-family: var(--font-ui); font-size: 13px; font-weight: 600;
+    padding: 9px 16px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.5);
+    background: rgba(255,255,255,0.1); color: #fff;
+    cursor: pointer; text-decoration: none;
+    backdrop-filter: blur(3px);
+    transition: background .15s ease, border-color .15s ease;
+  }
+  .reel-btn:hover { background: rgba(255,255,255,0.24); border-color: #fff; }
+  .reel-btn:disabled { opacity: .6; cursor: default; }
+  .reel-listen { background: #fff; color: #111; border-color: #fff; }
+  .reel-listen:hover { background: rgba(255,255,255,0.85); }
+
   /* ---------- News sites page ---------- */
   .site-grid {
     display: grid;
@@ -936,7 +1088,7 @@ export function renderNewspaper({
 
   <script>
     var TOTAL_PAGES = ${totalPages};
-    var PAGE_NAMES = ${JSON.stringify(["Cover", "Front", "Sites", "Fun", "Sports", "Slider"].concat(catPages.map((_, i) => "More " + (i + 1))))};
+    var PAGE_NAMES = ${JSON.stringify(["Cover", "Front", "Reel", "Sites", "Fun", "Sports", "Slider"].concat(catPages.map((_, i) => "More " + (i + 1))))};
     var currentPage = 0;
 
     var FLIP_MS = 780;
@@ -1053,6 +1205,76 @@ export function renderNewspaper({
       box.style.background = box.dataset.fallbackColor;
       box.textContent = box.dataset.letter || "?";
     }
+
+    // Listen on a reel is ONE press: the audio route generates the summary
+    // itself when it doesn't exist yet, so there's no summarize-first step.
+    function playReelAudio(btn) {
+      playAudio("/api/summary/" + btn.dataset.clusterId + "/audio", btn);
+    }
+
+    async function toggleReelSummary(btn) {
+      var id = btn.dataset.clusterId;
+      var box = document.getElementById("reel-summary-" + id);
+      if (box.textContent.trim()) {
+        box.textContent = "";
+        btn.textContent = "Read summary";
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = "Loading...";
+      try {
+        var res = await fetch("/api/summary/" + id);
+        var data = await res.json();
+        box.textContent = data.summary || "No summary available.";
+        btn.textContent = data.summary ? "Hide summary" : "Read summary";
+      } catch (err) {
+        box.textContent = "Could not load summary.";
+        btn.textContent = "Read summary";
+      }
+      btn.disabled = false;
+    }
+
+    // Which reel is on screen is tracked with an IntersectionObserver
+    // rather than by rounding scrollTop: the container scroll event is
+    // unreliable for programmatic scrolls, and the observer reports the
+    // card that is genuinely visible instead of one inferred from a
+    // pixel offset.
+    (function () {
+      var vp = document.getElementById("reelViewport");
+      if (!vp) return;
+      var reels = [].slice.call(vp.querySelectorAll(".reel"));
+
+      // Scrolling past a reel stops its clip, so one story never keeps
+      // talking over the one you moved to. Only the audio cutoff depends
+      // on the observer -- if it never reports, the clip simply plays on.
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting && currentAudioBtn && entry.target.contains(currentAudioBtn)) {
+            stopAudio();
+          }
+        });
+      }, { root: vp, threshold: 0.6 });
+      reels.forEach(function (r) { io.observe(r); });
+
+      // Every reel is exactly one viewport tall and snap-aligned, so the
+      // current index is just the scroll offset -- no observer state to
+      // wait on before the first key press works.
+      function scrollByReel(dir) {
+        var current = Math.round(vp.scrollTop / vp.clientHeight);
+        var next = Math.min(reels.length - 1, Math.max(0, current + dir));
+        if (next === current) return;
+        reels[next].scrollIntoView({ behavior: animationsEnabled() ? "smooth" : "auto", block: "start" });
+      }
+
+      // Up/down move between reels while the feed is on screen. Left and
+      // right still turn newspaper pages, so the reader is never trapped
+      // inside the feed.
+      document.addEventListener("keydown", function (e) {
+        if (!document.querySelector(".page.active .reel-viewport")) return;
+        if (e.key === "ArrowDown") { scrollByReel(1); e.preventDefault(); }
+        if (e.key === "ArrowUp") { scrollByReel(-1); e.preventDefault(); }
+      });
+    })();
 
     // Summaries for News Sites articles. These aren't clusters in our
     // database, so the headline is POSTed and the server hands back a key

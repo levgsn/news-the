@@ -156,10 +156,16 @@ app.get("/", async (req, res) => {
     // pass scrapes the publisher's own og:image; whatever is still empty
     // falls back to a CC-licensed keyword image, flagged as stock so the
     // UI can label it. Both persist, so a story pays this at most once.
-    // Capped at the fun page's first rows: each miss costs a live outbound
-    // lookup, and doing that for all 48 fun stories would stall the first
-    // render. The rest fill in on later loads as those stories rotate up.
-    const withThumbs = [breaking, ...trending, ...funClusters.slice(0, 12)].filter(Boolean);
+    // The Reel: the day's stories ranked most relevant first. Built from
+    // the same balanced hero pool the front page uses, so the ordering
+    // agrees with the rest of the paper and the left/right split carries
+    // through rather than the feed skewing one way.
+    const reels = balanceLeanMix(heroPool, 30);
+
+    // Capped at what the reader sees first: each miss costs a live
+    // outbound lookup, and doing that for every story would stall the
+    // first render. The rest fill in on later loads as stories rotate up.
+    const withThumbs = [breaking, ...trending, ...reels.slice(0, 14), ...funClusters.slice(0, 12)].filter(Boolean);
     await backfillImagesForClusters(withThumbs);
     await backfillKeywordImages(withThumbs);
 
@@ -172,7 +178,7 @@ app.get("/", async (req, res) => {
 
     res.send(
       renderNewspaper({
-        breaking, trending, categorySections, funClusters, sportsClusters,
+        breaking, trending, reels, categorySections, funClusters, sportsClusters,
         sports, sites: NEWS_SITES, slider, dailySummary,
       })
     );
